@@ -3,9 +3,14 @@ on: workflow_dispatch
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     steps:
-      - run: |
-          for u in https://apis.data.go.kr/ https://api.odcloud.kr/api https://www.google.com/; do
-            curl -s -o /dev/null -m 20 -w "$u %{http_code} %{time_total}s\n" "$u" || echo "$u 실패(시간초과/차단)"
+      - env: { K: "${{ secrets.DATA_GO_KR_KEY }}" }
+        run: |
+          E=$(node -e 'console.log(encodeURIComponent(process.env.K))')
+          for i in 1 2 3; do
+            curl -s -o /tmp/r.xml -m 40 -w "매매 %{http_code} %{time_total}s\n" "https://apis.data.go.kr/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev?serviceKey=$E&LAWD_CD=11680&DEAL_YMD=202609&pageNo=1&numOfRows=1000" || echo "매매 시간초과"
+            head -c 120 /tmp/r.xml | tr -d '\n'; echo
+            sleep 1
           done
+          curl -s -o /dev/null -m 40 -w "LH %{http_code} %{time_total}s\n" "https://apis.data.go.kr/B552555/lhLeaseNoticeInfo1/lhLeaseNoticeInfo1?serviceKey=$E&PG_SZ=10&PAGE=1" || echo "LH 시간초과"
