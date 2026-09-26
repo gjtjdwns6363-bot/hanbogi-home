@@ -53,12 +53,21 @@ const enc = encodeURIComponent(process.env.DATA_GO_KR_KEY || '');
 const calls = {};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const fatal = (msg) => Object.assign(new Error(msg), { fatal: true });
+const gate = {}; // API별 요청 간격. ponytail: 단순 간격 제한, 초당 한도가 더 빡빡하면 GAP만 늘린다
+const GAP = 250;
+async function pace(api) {
+  const prev = gate[api] || Promise.resolve();
+  let done; gate[api] = new Promise((r) => (done = r));
+  await prev; setTimeout(done, GAP);
+}
 async function get(api, url) { // 오류 메시지에 URL(키 포함)을 절대 넣지 않는다
   for (let i = 0; ; i++) {
+    await pace("all"); // 키 하나를 모든 API가 같이 쓰므로 간격도 하나로 묶는다
     if ((calls[api] = (calls[api] || 0) + 1) > CAP) throw fatal(`${api}: 호출 상한 ${CAP} 초과`);
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
       const text = await r.text();
+      if (r.status === 429 && /PER_SECOND/.test(text) && i < 8) { await sleep(3000 * (i + 1)); continue; } // 초당 한도: 잠깐 쉬고 다시
       if ([401, 403, 429].includes(r.status)) throw fatal(`${api}: HTTP ${r.status} ${text.slice(0, 200)}`);
       if (!r.ok) throw new Error(`${api}: HTTP ${r.status} ${text.slice(0, 200)}`);
       return text;
@@ -277,7 +286,7 @@ async function main() {
   const data = Object.fromEntries(regions.map((r) => [r.code, { trade: {}, rent: {}, failed: false }]));
   const tasks = regions.flatMap((r) => months.flatMap((ym) => [['trade', 'RTMSDataSvcAptTradeDev'], ['rent', 'RTMSDataSvcAptRent']].map(([k, op]) => ({ r, ym, k, op }))));
   const failures = [];
-  await pool(tasks, FIX ? 1 : 6, async (t) => {
+  await pool(tasks, FIX ? 1 : 3, async (t) => {
     try { data[t.r.code][t.k][t.ym] = await rtms(t.op, t.r.code, t.ym); } catch (e) {
       if (e.fatal) throw e;
       failures.push(`${t.r.sido} ${t.r.name}: ${e.message}`);
