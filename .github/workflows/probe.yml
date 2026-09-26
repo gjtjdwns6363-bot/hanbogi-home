@@ -1,0 +1,11 @@
+name: probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - run: |
+          for u in https://apis.data.go.kr/ https://api.odcloud.kr/api https://www.google.com/; do
+            curl -s -o /dev/null -m 20 -w "$u %{http_code} %{time_total}s\n" "$u" || echo "$u 실패(시간초과/차단)"
+          done
