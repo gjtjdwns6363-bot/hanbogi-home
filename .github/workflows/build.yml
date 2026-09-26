@@ -1,11 +1,7 @@
 name: build
 
-on:
-  schedule:
-    - cron: '0 20 * * *' # 매일 05:00 KST
+on: # 수동 실행 전용. 매일 갱신은 맥 launchd(com.hanbogi.home-daily) → deploy_local.sh
   workflow_dispatch:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
