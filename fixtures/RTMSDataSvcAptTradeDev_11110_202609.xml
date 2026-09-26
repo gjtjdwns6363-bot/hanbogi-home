@@ -1,0 +1,1 @@
+<OpenAPI_ServiceResponse><cmmMsgHeader><errMsg>SERVICE ERROR</errMsg><returnAuthMsg>SERVICETIMEOUT_ERROR</returnAuthMsg><returnReasonCode>05</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>
