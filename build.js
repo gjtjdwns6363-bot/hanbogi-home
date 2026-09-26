@@ -287,7 +287,7 @@ async function main() {
   const data = Object.fromEntries(regions.map((r) => [r.code, { trade: {}, rent: {}, failed: false }]));
   const tasks = regions.flatMap((r) => months.flatMap((ym) => [['trade', 'RTMSDataSvcAptTradeDev'], ['rent', 'RTMSDataSvcAptRent']].map(([k, op]) => ({ r, ym, k, op }))));
   const failures = [];
-  await pool(tasks, FIX ? 1 : 3, async (t) => {
+  await pool(tasks, FIX ? 1 : (+process.env.CONC || 3), async (t) => {
     try { data[t.r.code][t.k][t.ym] = await rtms(t.op, t.r.code, t.ym); } catch (e) {
       if (e.fatal) throw e;
       failures.push(`${t.r.sido} ${t.r.name}: ${e.message}`);
