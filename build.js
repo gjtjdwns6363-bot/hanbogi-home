@@ -64,10 +64,11 @@ async function get(api, url) { // 오류 메시지에 URL(키 포함)을 절대 
   for (let i = 0; ; i++) {
     await pace("all"); // 키 하나를 모든 API가 같이 쓰므로 간격도 하나로 묶는다
     if ((calls[api] = (calls[api] || 0) + 1) > CAP) throw fatal(`${api}: 호출 상한 ${CAP} 초과`);
+    if (calls[api] % 100 === 0) console.log(`[진행] ${api} ${calls[api]}회 · ${new Date().toISOString().slice(11, 19)}`);
     try {
       const r = await fetch(url, { signal: AbortSignal.timeout(30000) });
       const text = await r.text();
-      if (r.status === 429 && /PER_SECOND/.test(text) && i < 8) { await sleep(3000 * (i + 1)); continue; } // 초당 한도: 잠깐 쉬고 다시
+      if (r.status === 429 && /PER_SECOND/.test(text) && i < 8) { console.log(`[대기] ${api} 초당 한도, ${i + 1}번째 재시도`); await sleep(3000 * (i + 1)); continue; } // 초당 한도: 잠깐 쉬고 다시
       if ([401, 403, 429].includes(r.status)) throw fatal(`${api}: HTTP ${r.status} ${text.slice(0, 200)}`);
       if (!r.ok) throw new Error(`${api}: HTTP ${r.status} ${text.slice(0, 200)}`);
       return text;
