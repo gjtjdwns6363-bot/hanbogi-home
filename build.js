@@ -148,6 +148,7 @@ function page({ title, desc, p, body, noindex }) {
 <meta property="og:url" content="${SITE}${p}">
 <link rel="stylesheet" href="/style.css">
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5424435978828190" crossorigin="anonymous"></script>
+<meta name="naver-site-verification" content="fa471c31c15624eed79795f1054ec33c0ea276b2" />
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-19F8RF6971"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("js",new Date());gtag("config","G-19F8RF6971");</script>
 </head>
 <body>
