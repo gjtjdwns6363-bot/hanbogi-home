@@ -426,7 +426,7 @@ function page({ title, desc, p, body, noindex, ld, price }) { // price(만원) =
 ${body}
 <p class="warn">⚠️ 참고용 정보예요. 실거래가는 <b>신고 기준</b>이라 계약 해제·정정 신고로 나중에 바뀌거나 빠질 수 있어요. 청약·LH 공고는 일정이 바뀔 수 있으니 반드시 원문 공고문을 확인하세요.</p>
 <div class="card"><b>🧮 함께 쓰는 계산기</b>
-<ul class="chips" style="margin:10px 0 0"><li><a href="${CALC}/subscription/">청약 가점 계산기</a></li><li><a href="${CALC}/acquisition-tax/${price ? '?price=' + price : ''}">취득세 계산기${pq}</a></li><li><a href="${CALC}/brokerage/${price ? '?deal=sale&amp;amt=' + price : ''}">중개수수료 계산기${pq}</a></li><li><a href="${CALC}/loan/">주택담보대출 계산기</a></li><li><a href="${CALC}/rent/">전월세 전환 계산기</a></li></ul></div>
+<ul class="chips" style="margin:10px 0 0"><li><a href="${CALC}/subscription/">청약 가점 계산기</a></li><li><a href="${CALC}/acquisition-tax/${price ? '?price=' + price : ''}">취득세 계산기${pq}</a></li><li><a href="${CALC}/brokerage/${price ? '?deal=sale&amp;amt=' + price : ''}">중개수수료 계산기${pq}</a></li><li><a href="${CALC}/loan/${price ? "?amt=" + Math.round(price * 0.7 / 100) * 100 : ""}">주택담보대출 계산기${price ? " (집값 70% 대출 예시)" : ""}</a></li><li><a href="${CALC}/rent/">전월세 전환 계산기</a></li></ul></div>
 </main>
 <footer>데이터 출처: 국토교통부/한국부동산원/LH (공공데이터포털), 기준 시각 ${STAMP} KST<br>
 © 부동산 알리미 · <a href="/">홈</a> · <a href="/subscription/">청약 일정</a> · <a href="/lh/">LH 공고</a> · <a href="/about.html">소개</a> · <a href="/privacy.html">개인정보처리방침</a> · <a href="/rss.xml">RSS</a><br>
