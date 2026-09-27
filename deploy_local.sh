@@ -9,5 +9,6 @@ node build.js 2>&1 | grep -v serviceKey | tail -3
 [ -f dist/index.html ] && [ -d dist/data ] || { echo "빌드 결과 없음, 배포 안 함"; exit 1; }
 (cd dist && touch .nojekyll && rm -rf .git && git init -q -b gh-pages && git add -A && git commit -qm "매일 갱신 $(date '+%F %H:%M')" \
  && git push -q -f https://github.com/gjtjdwns6363-bot/hanbogi-home.git gh-pages && rm -rf .git \
- && gh api -X POST repos/gjtjdwns6363-bot/hanbogi-home/pages/builds >/dev/null && echo "배포 완료 $(date)")
+ && gh api -X POST repos/gjtjdwns6363-bot/hanbogi-home/pages/builds >/dev/null && echo "배포 완료 $(date)") \
+ && { node indexnow.js 2>&1 | tail -3 || true; } # 오늘 바뀐 URL만 네이버·IndexNow 전송, 실패해도 배포와 무관
 node backfill.js 2>&1 | grep -v serviceKey | grep -v '진행' | tail -4

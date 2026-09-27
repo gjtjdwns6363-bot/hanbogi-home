@@ -17,6 +17,8 @@ const CAP = +process.env.CAP || 4000; // API별 1회 실행 호출 상한 (일�
 const FATAL_CODES = new Set(['12', '20', '21', '22', '30', '31', '32']); // 서비스 없음·접근거부·키 문제·한도 초과
 const BANDS = ['60㎡ 이하', '60~85㎡', '85~135㎡', '135㎡ 초과'];
 const ROW_LIMIT = 200; // 월별 표에 보여줄 최대 거래 수
+const APT_MIN = 5; // 단지 페이지 색인 기준: 최근 3년 매매+전세 건수
+const APT_HOT = 5000; // sitemap-apt-hot.xml 에 넣을 거래 많은 단지 수
 
 // ---------- 순수 함수 (test.js에서 검사) ----------
 const comma = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -331,7 +333,7 @@ ${lhHere.length ? `<h2>🏠 ${esc(reg.sido)} LH 공고</h2><ul class="rec">${lhH
 <script src="/today.js" defer></script>`;
   const ld = [crumbs([['홈', '/'], ['오늘 실거래가', '/today/'], [reg.sido, `/r/${reg.code.slice(0, 2)}/`], [reg.name, base]]),
     { '@type': 'ItemList', name: title, numberOfItems: list.length, itemListElement: list.slice(0, 30).map((o, i) => ({ '@type': 'ListItem', position: i + 1, name: `${o.a} ${o.ar}㎡ ${fmtWon(o.p)}`, ...(o.q ? { url: `${SITE}/apt/${o.q}/` } : {}) })) }];
-  return { n: list.length, nrec, html: page({ title: `${title} | 부동산 알리미`, p: url, desc, body, noindex: !list.length, ld: { '@context': 'https://schema.org', '@graph': ld } }) };
+  return { n: list.length, nrec, html: page({ price: top?.p, title: `${title} | 부동산 알리미`, p: url, desc, body, noindex: !list.length, ld: { '@context': 'https://schema.org', '@graph': ld } }) };
 }
 
 // /apt/{aptSeq}/ 단지 상세: 면적별 요약·차트·이력 (저장소 36개월 + 최근 두 달 원자료)
@@ -372,7 +374,7 @@ ${rr.length ? `<h3>최근 두 달 전월세 (${rr.length}건${rr.length > 10 ? '
   const base = `/apt/${seq}/`, lastTxt = latestAll ? `${fmtWon(latestAll[0][1])} (${latestAll[1]}㎡, ${ymd2(d8s(latestAll[0][0])).slice(0, 5)})` : '';
   const nT = keysOf.reduce((s, k) => s + (h.t.k[k] || []).length, 0), nJ = keysOf.reduce((s, k) => s + (h.r.k[k] || []).length, 0);
   const body = `<p class="hint"><a href="/">홈</a> › <a href="/r/${reg.code.slice(0, 2)}/">${esc(reg.sido)}</a> › <a href="/r/${reg.code}/">${esc(reg.name)}</a> › ${esc(umd)}</p>
-<h1>${esc(nm)}</h1>
+<h1>${esc(reg.name)} ${esc(umd)} ${esc(nm)} 실거래가</h1>
 <p class="lead">${esc(reg.sido)} ${esc(reg.name)} ${esc(umd)} ${esc(meta.jibun || '')}${road ? ' · ' + esc(road) : ''}${by ? ` · ${by}년 준공 · ${yr - by + 1}년차` : ''}</p>
 <ul class="chips">${areas.map((a) => `<li><a href="#a${a}">전용 ${arTxt(a)}㎡</a></li>`).join('')}<li><a href="https://map.naver.com/p/search/${encodeURIComponent(`${reg.name} ${umd} ${nm}`)}" target="_blank" rel="noopener nofollow">네이버지도</a></li></ul>
 ${secs.join('\n')}
@@ -382,8 +384,9 @@ ${subsHere.length ? `<h2>📝 ${esc(reg.name)} 청약</h2><ul class="rec">${subs
   const ld = { '@context': 'https://schema.org', '@graph': [
     { '@type': 'ApartmentComplex', name: nm, url: SITE + base, address: { '@type': 'PostalAddress', addressRegion: reg.sido, addressLocality: `${reg.name} ${umd}`, ...(road ? { streetAddress: road } : {}), addressCountry: 'KR' }, ...(by ? { additionalProperty: { '@type': 'PropertyValue', name: 'yearBuilt', value: by } } : {}) },
     crumbs([['홈', '/'], [reg.sido, `/r/${reg.code.slice(0, 2)}/`], [reg.name, `/r/${reg.code}/`], [nm, base]])] };
-  return page({ title: `${nm} 실거래가 ${lastTxt}${jrAll ? ` · 전세가율 ${jrAll}%` : ''} | ${reg.name} ${umd}`, p: base, body, ld,
-    desc: `${nm}(${by ? by + '년, ' : ''}${reg.name} ${umd}) 최근 3년 매매 ${nT}건·전세 ${nJ}건 이력, 면적별 3년 최고·최저, 최근 전세 중위값과 전세가율.` });
+  const n = nT + nJ; // 최근 3년 매매+전세 건수: 5건 미만은 얇은 페이지라 noindex(사이트맵 제외), 주소는 그대로 연다
+  return { n, noindex: n < APT_MIN, html: page({ price: latestAll?.[0][1], noindex: n < APT_MIN, title: `${nm} 실거래가 ${lastTxt}${jrAll ? ` · 전세가율 ${jrAll}%` : ''} | ${reg.name} ${umd}`, p: base, body, ld,
+    desc: `${nm}(${by ? by + '년, ' : ''}${reg.name} ${umd}) 최근 3년 매매 ${nT}건·전세 ${nJ}건 이력, 면적별 3년 최고·최저, 최근 전세 중위값과 전세가율.` }) };
 }
 
 async function pool(items, n, fn) {
@@ -393,7 +396,12 @@ async function pool(items, n, fn) {
 
 // ---------- 렌더 ----------
 let STAMP = '';
-function page({ title, desc, p, body, noindex, ld }) {
+const INDEXNOW_KEY = 'e386846d4b6f939fd1b440af9728c599';
+const NETWORK = [['계산기', CALC], ['부동산 알리미', SITE], ['정부 지원금 찾기', 'https://grant.hanbogi.com'], ['혜택 알리미', 'https://benefit.hanbogi.com'], ['자격증 한눈에', 'https://license.hanbogi.com'], ['오늘의 게임', 'https://hanbogi.com'], ['오늘의 숙소', 'https://stay.hanbogi.com'], ['기기 비교소', 'https://gadget.hanbogi.com']];
+// 혜택 알리미 청약 가점 글(/9)은 2026-10-01 12:00 예약 공개 — 그 전엔 블로그 홈으로
+const benefitSub = (today) => today >= '2026-10-02' ? 'https://benefit.hanbogi.com/9' : 'https://benefit.hanbogi.com';
+function page({ title, desc, p, body, noindex, ld, price }) { // price(만원) = 계산기에 미리 채울 거래가
+  const pq = price ? ` <span class="hint">(${fmtWon(price)} 기준)</span>` : '';
   return `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
@@ -402,6 +410,10 @@ function page({ title, desc, p, body, noindex, ld }) {
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(desc)}">
 <meta property="og:url" content="${SITE}${p}">
+<meta property="og:type" content="website"><meta property="og:site_name" content="부동산 알리미"><meta property="og:locale" content="ko_KR">
+<meta property="og:image" content="${SITE}/og.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="alternate" type="application/rss+xml" title="부동산 알리미 실거래 리포트" href="${SITE}/rss.xml">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="icon" href="/favicon-32.png" sizes="32x32"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="stylesheet" href="/style.css">${ld ? '\n' + ldScript(ld) : ''}
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5424435978828190" crossorigin="anonymous"></script>
@@ -414,10 +426,11 @@ function page({ title, desc, p, body, noindex, ld }) {
 ${body}
 <p class="warn">⚠️ 참고용 정보예요. 실거래가는 <b>신고 기준</b>이라 계약 해제·정정 신고로 나중에 바뀌거나 빠질 수 있어요. 청약·LH 공고는 일정이 바뀔 수 있으니 반드시 원문 공고문을 확인하세요.</p>
 <div class="card"><b>🧮 함께 쓰는 계산기</b>
-<ul class="chips" style="margin:10px 0 0"><li><a href="${CALC}/subscription/">청약 가점 계산기</a></li><li><a href="${CALC}/acquisition-tax/">취득세 계산기</a></li><li><a href="${CALC}/brokerage/">중개수수료 계산기</a></li><li><a href="${CALC}/loan/">주택담보대출 계산기</a></li><li><a href="${CALC}/rent/">전월세 전환 계산기</a></li></ul></div>
+<ul class="chips" style="margin:10px 0 0"><li><a href="${CALC}/subscription/">청약 가점 계산기</a></li><li><a href="${CALC}/acquisition-tax/${price ? '?price=' + price : ''}">취득세 계산기${pq}</a></li><li><a href="${CALC}/brokerage/${price ? '?deal=sale&amp;amt=' + price : ''}">중개수수료 계산기${pq}</a></li><li><a href="${CALC}/loan/">주택담보대출 계산기</a></li><li><a href="${CALC}/rent/">전월세 전환 계산기</a></li></ul></div>
 </main>
 <footer>데이터 출처: 국토교통부/한국부동산원/LH (공공데이터포털), 기준 시각 ${STAMP} KST<br>
-© 부동산 알리미 · <a href="/">홈</a> · <a href="/subscription/">청약 일정</a> · <a href="/lh/">LH 공고</a> · <a href="/privacy.html">개인정보처리방침</a> · <a href="${CALC}/">한눈 계산기</a></footer>
+© 부동산 알리미 · <a href="/">홈</a> · <a href="/subscription/">청약 일정</a> · <a href="/lh/">LH 공고</a> · <a href="/about.html">소개</a> · <a href="/privacy.html">개인정보처리방침</a> · <a href="/rss.xml">RSS</a><br>
+한보기 네트워크: ${NETWORK.map(([n, u]) => `<a href="${u}/">${n}</a>`).join(' · ')}</footer>
 </body></html>
 `;
 }
@@ -490,7 +503,7 @@ function regionPage(reg, label, months, trade, rent, failed, d) {
   }
   return {
     nT, nR, noindex: nT + nR === 0 || failed,
-    html: page({ title: title + ' | 부동산 알리미', p: `/apt/${reg.code}/`, body, noindex: nT + nR === 0 || failed,
+    html: page({ price: median(months.flatMap((ym) => liveT(ym).map((r) => toMan(r.dealAmount)))), title: title + ' | 부동산 알리미', p: `/apt/${reg.code}/`, body, noindex: nT + nR === 0 || failed,
       desc: `${reg.sido} ${reg.name} 아파트 매매 실거래가 ${nT}건과 전월세 ${nR}건. 단지·면적·층·거래금액과 면적대별 중위가격을 매일 갱신해요.` }),
   };
 }
@@ -502,7 +515,7 @@ function subRow(x) {
 }
 const SUB_HEAD = ['지역', '단지명', '공급 ', '청약접수', '당첨발표', '원문'];
 
-function subDetail(x, models) {
+function subDetail(x, models, today) {
   const sched = [
     ['모집공고일', normDate(x.RCRIT_PBLANC_DE)],
     ['특별공급 접수', [x.SPSPLY_RCEPT_BGNDE, x.SPSPLY_RCEPT_ENDDE]],
@@ -532,7 +545,7 @@ function subDetail(x, models) {
     td(esc(m.HOUSE_TY)) + td(esc(m.SUPLY_AR), 1) + td(n(m.SUPLY_HSHLDCO), 1) + td(n(m.SPSPLY_HSHLDCO), 1) + td(toMan(m.LTTOT_TOP_AMOUNT) ? fmtWon(toMan(m.LTTOT_TOP_AMOUNT)) : '-', 1) + '</tr>'))
     : '<p class="hint">주택형 정보를 불러오지 못했어요. 원문 공고를 확인하세요.</p>'}
 <h2>단지 정보</h2>${kv(info)}
-<p>내 청약 가점이 궁금하면 <a href="${CALC}/subscription/">청약 가점 계산기</a>, 분양가 기준 세금은 <a href="${CALC}/acquisition-tax/">취득세 계산기</a>로 확인하세요.</p>`;
+<p>내 청약 가점이 궁금하면 <a href="${CALC}/subscription/">청약 가점 계산기</a>, 가점 계산법은 <a href="${benefitSub(today)}">혜택 알리미 청약 가점 정리</a>, 분양가 기준 세금은 <a href="${CALC}/acquisition-tax/">취득세 계산기</a>로 확인하세요.</p>`;
   return page({ title: `${x.HOUSE_NM} 청약 일정·분양가 | 부동산 알리미`, p: `/subscription/${x.HOUSE_MANAGE_NO}/`, body,
     desc: `${x.HOUSE_NM} (${x.SUBSCRPT_AREA_CODE_NM}) 청약 접수 ${normDate(x.RCEPT_BGNDE)}~${normDate(x.RCEPT_ENDDE)}, 당첨자 발표 ${normDate(x.PRZWNER_PRESNATN_DE)}. 주택형별 공급세대와 분양가.` });
 }
@@ -645,7 +658,7 @@ async function main() {
     if (!noindex) indexable.push(p);
   };
   fs.mkdirSync(OUT, { recursive: true });
-  for (const f of ['style.css', 'CNAME', 'today.js', 'favicon.svg', 'favicon-32.png', 'apple-touch-icon.png']) fs.copyFileSync(path.join(__dirname, f), path.join(OUT, f));
+  for (const f of ['style.css', 'CNAME', 'today.js', 'favicon.svg', 'favicon-32.png', 'apple-touch-icon.png', 'og.png', INDEXNOW_KEY + '.txt']) fs.copyFileSync(path.join(__dirname, f), path.join(OUT, f));
 
   // 1-1) 저장소 갱신 · 신고가 · 단지 페이지(/apt/{aptSeq}/) — 최근 두 달을 저장소에 덮어쓰고, 각 거래를 그보다 이른 거래와 비교
   const since14 = new Date(kst.getTime() - 14 * 86400e3).toISOString().slice(0, 10);
@@ -657,7 +670,7 @@ async function main() {
     r.subsHere = openSubs.filter((x) => (x.HSSPLY_ADRES || '').includes(r.sido.slice(0, 2)) && (x.HSSPLY_ADRES || '').includes(r.name)).slice(0, 5);
     r.lhHere = lhOpenAll.filter((x) => (x.CNP_CD_NM || '').slice(0, 2) === r.sido.slice(0, 2)).slice(0, 5);
   }
-  let nApt = 0;
+  let nApt = 0; const aptN = {};
   for (const r of regions) {
     const h = FIX ? emptyHist() : loadHist(r.code), d = data[r.code];
     d.rec = {}; d.cov = {};
@@ -686,7 +699,8 @@ async function main() {
     for (const [q, rw] of Object.entries(rowsBy)) { const m = rw.t[0] || rw.r[0]; (byUmd[m.umdNm] ||= []).push([q, m.aptNm, rw.t.length + rw.r.length]); }
     for (const [q, rw] of Object.entries(rowsBy)) {
       const umd = (rw.t[0] || rw.r[0]).umdNm, nb = byUmd[umd].filter((x) => x[0] !== q).sort((a, b) => b[2] - a[2]).slice(0, 10);
-      write(`/apt/${q}/`, aptPage(q, r, [...seqKeys[q]], h, rw.t, rw.r, nb, r.subsHere, today));
+      const ap = aptPage(q, r, [...seqKeys[q]], h, rw.t, rw.r, nb, r.subsHere, today);
+      write(`/apt/${q}/`, ap.html, ap.noindex); aptN[`/apt/${q}/`] = ap.n;
       nApt++;
     }
     if (!RO) saveHist(r.code, h);
@@ -798,6 +812,12 @@ ${Object.entries(bySido).map(([sc, rs]) => `<h2><a href="/r/${sc}/">${esc(rs[0].
     if (!RO) { fs.mkdirSync(RD, { recursive: true }); fs.writeFileSync(path.join(RD, today + '.json'), JSON.stringify(rep)); }
     const saved = [rep, ...(FIX || !fs.existsSync(RD) ? [] : fs.readdirSync(RD).filter((f) => /^\d{4}-\d\d-\d\d\.json$/.test(f) && f !== today + '.json').sort().reverse().map((f) => JSON.parse(fs.readFileSync(path.join(RD, f), 'utf8'))))];
     for (const x of saved) write(x.p, page(x));
+    const pub = (x) => new Date(x.p.slice(8, 18) + 'T05:00:00+09:00').toUTCString(); // /report/YYYY-MM-DD/
+    fs.writeFileSync(path.join(OUT, 'rss.xml'), `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>부동산 알리미 실거래 리포트</title><link>${SITE}/report/</link><description>매일 05시 새로 공개된 아파트 실거래: 신고가·상승·하락 TOP 10</description><language>ko</language><lastBuildDate>${pub(saved[0])}</lastBuildDate>
+${saved.slice(0, 30).map((x) => `<item><title>${esc(x.title.split(' | ')[0])}</title><link>${SITE}${x.p}</link><guid>${SITE}${x.p}</guid><pubDate>${pub(x)}</pubDate><description>${esc(x.desc)}</description></item>`).join('\n')}
+</channel></rss>
+`);
     write('/report/', page({ title: '아파트 실거래 리포트 | 날짜별 신고가·상승·하락 | 부동산 알리미', p: '/report/',
       desc: '날짜별 아파트 실거래 리포트: 새로 공개된 거래의 시도별 건수, 신고가 TOP 10, 상승·하락 TOP 10, 거래 많은 지역.',
       body: `<h1>아파트 실거래 리포트</h1><p class="lead">매일 05시 수집한 새 공개 거래를 한 페이지로 정리해요.</p><ul class="rec">${saved.map((x) => `<li><a href="${x.p}">${esc(x.title.split(' | ')[0])}</a> <span class="hint">${esc(x.desc.split(':')[1] || '').split('.')[0]}</span></li>`).join('')}</ul>` }));
@@ -810,9 +830,10 @@ ${Object.entries(bySido).map(([sc, rs]) => `<h2><a href="/r/${sc}/">${esc(rs[0].
     desc: `청약홈 APT 분양 공고 중 접수 중이거나 예정인 ${open.length}곳의 청약 접수 기간, 당첨자 발표일, 공급 규모. 매일 갱신.`,
     body: `<h1>아파트 청약 일정</h1>
 <p class="lead">한국부동산원 청약홈에 올라온 APT 분양 공고예요. 접수 시작일 순으로 정리했어요. 단지명을 누르면 주택형별 분양가를 볼 수 있어요.</p>
+<p>👉 내 점수부터: <a href="${CALC}/subscription/">청약 가점 계산기</a> · <a href="${benefitSub(today)}">청약 가점 계산법 (혜택 알리미)</a></p>
 <h2>접수 중·예정 (${open.length}곳)</h2>${table(SUB_HEAD, open.map(subRow))}
 <h2>최근 마감 (${closed.length}곳)</h2>${table(SUB_HEAD, closed.map(subRow))}` }));
-  for (const x of subs) write(`/subscription/${x.HOUSE_MANAGE_NO}/`, subDetail(x, models[x.HOUSE_MANAGE_NO]));
+  for (const x of subs) write(`/subscription/${x.HOUSE_MANAGE_NO}/`, subDetail(x, models[x.HOUSE_MANAGE_NO], today));
 
   // LH
   const lhRow = (x) => '<tr>' + td(link(x.DTL_URL, esc(x.PAN_NM))) + td(esc(x.CNP_CD_NM)) + td(esc([x.UPP_AIS_TP_NM, x.AIS_TP_CD_NM].filter((v, i, a) => v && a.indexOf(v) === i).join(' · '))) +
@@ -851,6 +872,17 @@ ${recHome.html}
 <p>이 사이트는 Google 애드센스 광고를 게재할 수 있어요. Google 및 제3자 광고 사업자는 쿠키를 사용해 이 사이트와 다른 사이트 방문 기록을 바탕으로 광고를 제공할 수 있어요. <a href="https://adssettings.google.com" rel="nofollow">Google 광고 설정</a>에서 맞춤 광고를 끌 수 있어요.</p>
 <p>문의: 혜택 알리미 블로그(<a href="https://benefit.hanbogi.com">benefit.hanbogi.com</a>) 방명록</p>
 <p class="hint">시행일: 2026년 9월 26일</p></div>` }));
+  write('/about.html', page({ title: '부동산 알리미 소개 | 데이터 출처·갱신 주기·신고가 기준', p: '/about.html', desc: '부동산 알리미는 국토교통부·한국부동산원·LH 공공데이터로 전국 아파트 실거래가·신고가·청약·LH 공고를 매일 05시에 갱신하는 무료 사이트예요.',
+    body: `<h1>부동산 알리미 소개</h1>
+<div class="card"><h2>운영 목적</h2><p>흩어져 있는 아파트 실거래가·청약 일정·LH 공고를 한곳에서 빠르게 확인하도록 돕는 무료 정보 사이트예요. 회원가입 없이 누구나 볼 수 있어요.</p>
+<h2>데이터 출처</h2><ul>
+<li>아파트 매매·전월세 실거래가: 국토교통부 실거래가 공개시스템 (공공데이터포털 API)</li>
+<li>APT 분양 청약 일정·주택형별 분양가: 한국부동산원 청약홈 (공공데이터포털 API)</li>
+<li>분양·임대 공고: 한국토지주택공사(LH) 청약플러스 (공공데이터포털 API)</li></ul>
+<h2>갱신 주기</h2><p>매일 새벽 05시(KST)에 최근 두 달 자료를 다시 받아 모든 페이지를 새로 만들어요. 각 페이지 아래에 기준 시각이 적혀 있어요.</p>
+<h2>신고가 기준</h2><p>같은 단지·같은 전용면적(㎡ 반올림)에서 <b>계약일이 더 이른 거래(최대 3년)</b>의 최고가보다 비싼 거래를 신고가로 봐요. 이전 거래가 없는 첫 거래는 신고가가 아니에요. 매매는 계약 해제 거래를, 전세는 월세(월세 0원 초과) 거래를 빼고 비교해요. 같은 값은 '최고가 동률'로 따로 표시해요.</p>
+<h2>면책</h2><p>모든 정보는 참고용이에요. 실거래가는 신고 기준이라 해제·정정 신고로 나중에 바뀌거나 빠질 수 있고, 청약·LH 일정도 바뀔 수 있어요. 투자·계약 판단 전에는 반드시 원문 공고와 공식 자료를 확인하세요. 이 정보로 생긴 손해에 대해 운영자는 책임지지 않아요.</p>
+<h2>운영</h2><p>운영: 한보기 (hanbogi.com 네트워크)<br>문의: <a href="https://benefit.hanbogi.com/guestbook">혜택 알리미 방명록</a></p></div>` }));
   write('/404.html', page({ title: '페이지를 찾을 수 없어요 | 부동산 알리미', p: '/404.html', desc: '페이지를 찾을 수 없어요', noindex: true,
     body: '<h1>페이지를 찾을 수 없어요</h1><p class="lead">주소가 바뀌었거나 지난 공고일 수 있어요.</p><p><a href="/">홈으로</a> · <a href="/subscription/">청약 일정</a> · <a href="/lh/">LH 공고</a></p>' }), true);
 
@@ -858,13 +890,14 @@ ${recHome.html}
   // 사이트맵: 색인(sitemap.xml) → 일반·지역(/r/)·단지(/apt/{aptSeq}/ 5만 개씩)
   const urlset = (ps) => `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${ps.map((p) => `<url><loc>${SITE}${p}</loc><lastmod>${seenPages[p][1]}</lastmod></url>`).join('\n')}\n</urlset>\n`;
   const isApt = (p) => /^\/apt\/\d{5}-\d+\/$/.test(p), groups = { main: indexable.filter((p) => !p.startsWith('/r/') && !isApt(p)), regions: indexable.filter((p) => p.startsWith('/r/')) };
-  const apts = indexable.filter(isApt);
-  for (let i = 0; i * 50000 < apts.length; i++) groups['apt-' + (i + 1)] = apts.slice(i * 50000, (i + 1) * 50000);
+  const apts = indexable.filter(isApt).sort((a, b) => (aptN[b] || 0) - (aptN[a] || 0) || a.localeCompare(b));
+  groups['apt-hot'] = apts.slice(0, APT_HOT);
+  for (let i = 0; APT_HOT + i * 50000 < apts.length; i++) groups['apt-rest' + (i ? '-' + (i + 1) : '')] = apts.slice(APT_HOT + i * 50000, APT_HOT + (i + 1) * 50000);
   const smFiles = Object.entries(groups).filter(([, ps]) => ps.length).map(([n, ps]) => { fs.writeFileSync(path.join(OUT, `sitemap-${n}.xml`), urlset(ps)); return [n, ps.reduce((m, p) => (seenPages[p][1] > m ? seenPages[p][1] : m), '')]; });
   fs.writeFileSync(path.join(OUT, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${smFiles.map(([n, lm]) => `<sitemap><loc>${SITE}/sitemap-${n}.xml</loc><lastmod>${lm}</lastmod></sitemap>`).join('\n')}\n</sitemapindex>\n`);
   if (!RO) fs.writeFileSync(path.join(HIST, '_pages.json'), JSON.stringify(seenPages));
 
-  console.log(`완료: 페이지 ${pages}개 (색인 ${indexable.length}, 단지 ${nApt}), 공개일 기준선 ${baseline ? '예(첫 수집)' : '아니오'}, 실거래 실패 ${failures.length}/${tasks.length}, 청약 ${subs.length}, LH ${lh.length}`);
+  console.log(`완료: 페이지 ${pages}개 (색인 ${indexable.length}, 단지 ${nApt} 중 색인 ${indexable.filter(isApt).length}), 공개일 기준선 ${baseline ? '예(첫 수집)' : '아니오'}, 실거래 실패 ${failures.length}/${tasks.length}, 청약 ${subs.length}, LH ${lh.length}`);
   console.log('API 호출 수:', FIX ? '(fixtures)' : CACHE ? '(캐시, 0회)' : JSON.stringify(calls));
 }
 

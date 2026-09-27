@@ -88,4 +88,14 @@ assert.deepStrictEqual(jeonseMedian([[20260801, 50000, 3], [20260901, 60000, 5],
   const sec = require('./build.js').recSection({ t: L, r: [] }, { t: [], r: [] }, [], 2026);                     // 홈에 싣는 스크립트가 문법 오류 없이 파싱되는지
   new Function(sec.html.match(/<script>([\s\S]*)<\/script>/)[1]); assert.strictEqual(JSON.parse(sec.json).t.length, 4); }
 
+// IndexNow: 사이트맵 lastmod == 오늘인 URL만, 색인 순서대로, 상한까지
+{ const { changedUrls } = require('./indexnow.js'), os = require('os'), dir = fs.mkdtempSync(require('path').join(os.tmpdir(), 'inow-'));
+  const u = (p, d) => `<url><loc>https://home.hanbogi.com${p}</loc><lastmod>${d}</lastmod></url>`;
+  fs.writeFileSync(dir + '/sitemap.xml', '<sitemapindex><sitemap><loc>https://home.hanbogi.com/sitemap-main.xml</loc></sitemap><sitemap><loc>https://home.hanbogi.com/sitemap-apt-hot.xml</loc></sitemap></sitemapindex>');
+  fs.writeFileSync(dir + '/sitemap-main.xml', [u('/', '2026-09-28'), u('/lh/', '2026-09-27')].join('\n'));
+  fs.writeFileSync(dir + '/sitemap-apt-hot.xml', [u('/apt/1-1/', '2026-09-28'), u('/apt/1-2/', '2026-09-28')].join('\n'));
+  assert.deepStrictEqual(changedUrls(dir, '2026-09-28'), ['https://home.hanbogi.com/', 'https://home.hanbogi.com/apt/1-1/', 'https://home.hanbogi.com/apt/1-2/']);
+  assert.strictEqual(changedUrls(dir, '2026-09-28', 2).length, 2);
+  fs.rmSync(dir, { recursive: true }); }
+
 console.log('test.js: 모두 통과');

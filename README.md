@@ -13,7 +13,9 @@
 - 저장소 `history/<시군구>.json`: 매매·전세별 채운 달 목록과 키별 `[계약일, 만원, 층(, 갱신=1)]` 목록, 거래를 처음 본 날 `seen`·해제를 처음 본 날 `seenX`(한 번 정하면 고정). 매일 빌드가 최근 두 달을 덮어쓴다. `history/_pages.json` = 페이지별 내용 해시와 마지막 변경일(사이트맵 lastmod), `history/reports/` = 날짜별 리포트 본문.
 - 12개월 이상 모인 시군구만 홈 “최근 신고가”에 나온다. 자료는 빌드 때 `dist/data/rec.json`(카드·월별 중위가 스파크라인)으로 따로 내보내고, 홈은 기본 상승률순 카드 20장씩 그린다(상승액순·최신 계약순 선택). 그 전엔 “과거 데이터 수집 중(최근 N개월 기준)” 표시.
 - 페이지: `/r/<시군구>/`(+`high/ up/ down/ rent/ monthly/ cancel/ week/ month/`) 오늘 공개된 거래 카드(HTML에 전부, `today.js`는 거르기·정렬·50건씩만), `/r/<시도>/`, `/today/` 모음, `/apt/<aptSeq>/` 단지 상세(면적별 요약·SVG 차트·이력), `/report/<날짜>/` 날짜별 리포트. 기존 `/apt/<시군구>/` 두 달 거래표도 그대로 둔다.
-- 사이트맵: `sitemap.xml`(색인) → `sitemap-main.xml`, `sitemap-regions.xml`, `sitemap-apt-N.xml`(5만 개씩).
+- 사이트맵: `sitemap.xml`(색인) → `sitemap-main.xml`, `sitemap-regions.xml`, `sitemap-apt-hot.xml`(최근 3년 거래 많은 단지 상위 5,000), `sitemap-apt-rest.xml`(나머지, 5만 개 넘으면 `-2`…). 최근 3년 매매+전세 **5건 미만** 단지는 `noindex,follow` + 사이트맵 제외(주소는 그대로 열림, `APT_MIN`·`APT_HOT`).
+- SEO: 모든 페이지 og 태그·`/og.png`(1200×630, 헤드리스 Chrome으로 만든 정적 이미지), 푸터에 한보기 네트워크 8곳·`/about.html`, `/rss.xml`(날짜별 리포트 최근 30개). 단지·지역 페이지의 취득세·중개수수료 계산기 링크는 거래가를 미리 채운다(`?price=`, `?deal=sale&amt=`, 만원).
+- IndexNow: 키 파일 `e386846d4b6f939fd1b440af9728c599.txt`를 매 빌드 dist에 복사. `deploy_local.sh`가 배포 성공 뒤 `node indexnow.js`로 사이트맵 lastmod가 오늘인 URL만(최대 1만) 네이버 서치어드바이저·api.indexnow.org에 보내고 상태를 deploy.log에 남긴다. 실패해도 배포와 무관. `node indexnow.js --dry` = 보낼 개수만 확인.
 - 설계 참고: `벤치마킹_하우스랭킹.md` (git 제외)
 
 ## 데이터
