@@ -81,3 +81,5 @@ button.more{display:block;margin:12px auto;padding:10px 28px}
 .dot{display:inline-block;width:9px;height:9px;border-radius:50%}
 tr.cx td{color:var(--muted)}
 section{scroll-margin-top:12px}
+.chart path.dt,.chart path.dj{fill:none;stroke-width:6;stroke-linecap:round}.chart path.dt{stroke:var(--brand)}.chart path.dj{stroke:var(--ok)}
+.nw td:first-child,td.nw{white-space:nowrap}
