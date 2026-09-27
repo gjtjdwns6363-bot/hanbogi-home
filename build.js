@@ -10,7 +10,7 @@ const FIX = process.argv.includes('--fixtures');
 const SITE = 'https://home.hanbogi.com';
 const CALC = 'https://calc.hanbogi.com';
 const OUT = path.join(__dirname, 'dist');
-const CAP = 4000; // API별 1회 실행 호출 상한 (일일 한도 10,000)
+const CAP = +process.env.CAP || 4000; // API별 1회 실행 호출 상한 (일일 한도 10,000)
 const FATAL_CODES = new Set(['12', '20', '21', '22', '30', '31', '32']); // 서비스 없음·접근거부·키 문제·한도 초과
 const BANDS = ['60㎡ 이하', '60~85㎡', '85~135㎡', '135㎡ 초과'];
 const ROW_LIMIT = 200; // 월별 표에 보여줄 최대 거래 수
@@ -130,6 +130,107 @@ async function lhNotices(since8, today8) { // LH 분양임대공고문 (JSON 배
   return out;
 }
 
+// ---------- 신고가 (단지·전용면적별 거래 기록) ----------
+// 키: aptSeq|전용㎡ 반올림 (aptSeq 없으면 시군구/동/단지/지번). 가격 0 = 제외 (매매 해제, 월세)
+// 저장소 history/<시군구>.json = { t|r: { m: [채운 달], k: { 키: [[계약일 yyyymmdd, 만원, 층], ...] } }, seen: { 거래id: 처음 본 날 } }
+const recKey = (r) => `${(r.aptSeq || '').trim() || [r.sggCd, r.umdNm, r.aptNm, r.jibun].join('/')}|${Math.round(+r.excluUseAr)}`;
+const recPrice = (kind, r) => kind === 't' ? (r.cdealType === 'O' ? 0 : toMan(r.dealAmount)) : (toMan(r.monthlyRent) ? 0 : toMan(r.deposit));
+const d8n = (r) => +dealDate(r).replace(/-/g, '');
+const d8s = (n) => String(n).replace(/(\d{4})(\d\d)(\d\d)/, '$1-$2-$3');
+function putMonth(H, ym, kind, rows) { // 그 달 기록을 통째로 새 자료로 바꾼다 (해제·정정 반영)
+  if (H.m.includes(ym)) for (const k of Object.keys(H.k)) {
+    const l = H.k[k].filter((e) => String(e[0]).slice(0, 6) !== ym);
+    if (l.length) H.k[k] = l; else delete H.k[k];
+  }
+  for (const r of rows) { const p = recPrice(kind, r); if (p) (H.k[recKey(r)] ||= []).push([d8n(r), p, parseInt(r.floor, 10) || 0]); }
+  if (!H.m.includes(ym)) H.m.push(ym);
+}
+function priorStats(list, d) { // 계약일 d보다 "이른" 거래만: 직전거래·최고·최저. 없으면 null
+  let prev = null, hi = null, lo = null;
+  for (const e of list || []) if (e[0] < d) {
+    if (!prev || e[0] >= prev[0]) prev = e;
+    if (!hi || e[1] > hi[1] || (e[1] === hi[1] && e[0] < hi[0])) hi = e;
+    if (!lo || e[1] < lo[1]) lo = e;
+  }
+  return prev && { prev, hi, lo };
+}
+// 신고가: 같은 키에서 계약일이 더 이른 거래(저장 범위 최대 36개월)의 최고가보다 비싼 거래. 이전 거래가 없으면(첫 거래) 신고가 아님.
+function findRecords(kind, rows, H) {
+  const out = [];
+  for (const r of rows) {
+    const p = recPrice(kind, r), st = p && priorStats(H.k[recKey(r)], d8n(r));
+    if (st && p > st.hi[1]) out.push({ r, p, key: recKey(r), d: dealDate(r), prev: st.hi[1], prevDate: d8s(st.hi[0]) });
+  }
+  return out;
+}
+const HIST = process.env.HIST_DIR || path.join(__dirname, 'history');
+const RELIABLE = 12; // 이 개월 수 이상 모이면 신고가를 믿을 만하다고 본다
+const emptyHist = () => ({ t: { m: [], k: {} }, r: { m: [], k: {} } });
+function loadHist(code) {
+  try { return JSON.parse(fs.readFileSync(path.join(HIST, code + '.json'), 'utf8')); } catch { return emptyHist(); }
+}
+function saveHist(code, h) {
+  fs.mkdirSync(HIST, { recursive: true });
+  fs.writeFileSync(path.join(HIST, code + '.json'), JSON.stringify(h));
+}
+function pruneHist(H, fromYm) { // 36개월보다 오래된 달은 버린다
+  H.m = H.m.filter((ym) => ym >= fromYm);
+  const min = +fromYm * 100;
+  for (const k of Object.keys(H.k)) { const l = H.k[k].filter((e) => e[0] >= min); if (l.length) H.k[k] = l; else delete H.k[k]; }
+}
+
+// /data/<시군구>.json 의 거래 목록: v t=매매 j=전세 w=월세, pv/hi/lo/o = [만원, 층, 날짜], k = 추이(K) 번호, s = 처음 본 날
+function dealRows(d, h, months, today, seenOld) {
+  const out = [], K = [], ki = {}, seen = {};
+  const sp = (l) => (l || []).slice().sort((a, b) => a[0] - b[0]).slice(-24).map((e) => [e[0], e[1]]);
+  const kIdx = (key) => (key in ki ? ki[key] : (K.push({ t: sp(h.t.k[key]), j: sp(h.r.k[key]) }), (ki[key] = K.length - 1)));
+  const latest = (l) => (l || []).reduce((a, e) => (!a || e[0] > a[0] ? e : a), null);
+  const pfd = (e) => [e[1], e[2], d8s(e[0])];
+  const push = (v, r) => {
+    const key = recKey(r), dn = d8n(r), x = r.cdealType === 'O', p = toMan(v === 't' ? r.dealAmount : r.deposit);
+    const o = { v, a: r.aptNm, u: r.umdNm, y: +r.buildYear || 0, ar: +r.excluUseAr, f: r.floor, d: d8s(dn), p };
+    const id = [v, key, dn, p, r.floor, r.monthlyRent].join('|');
+    seen[id] = seenOld ? (seenOld[id] ?? today) : ''; // 저장소 첫 실행 날은 기준선('')
+    if (seen[id]) o.s = seen[id];
+    if (v === 'w') o.m = toMan(r.monthlyRent);
+    else {
+      const st = priorStats((v === 't' ? h.t : h.r).k[key], dn), oth = latest((v === 't' ? h.r : h.t).k[key]);
+      if (st) { o.pv = pfd(st.prev); o.hi = pfd(st.hi); o.lo = pfd(st.lo); if (!x && p > st.hi[1]) o.r = 1; }
+      if (oth) o.o = pfd(oth);
+      o.k = kIdx(key);
+    }
+    if (v !== 't' && r.contractType?.trim()) o.ct = r.contractType.trim();
+    if (x) o.x = 1;
+    if (r.dealingGbn === '직거래') o.g = 1;
+    out.push(o);
+  };
+  for (const ym of months) {
+    for (const r of d.trade[ym] || []) push('t', r);
+    for (const r of d.rent[ym] || []) push(toMan(r.monthlyRent) ? 'w' : 'j', r);
+  }
+  return { deals: out, K, seen };
+}
+
+function todayPage(regions) {
+  const views = [['tr', '매매 실거래'], ['trec', '🔥 매매 신고가'], ['up', '매매 상승거래'], ['down', '매매 하락거래'], ['j', '전세 실거래'], ['jrec', '🔥 전세 신고가'], ['w', '월세 실거래']];
+  return page({ title: '오늘 아파트 실거래가 | 신고가·상승·하락 거래 | 부동산 알리미', p: '/today/',
+    desc: '시군구·읍면동별 최근 신고된 아파트 매매·전세·월세 실거래와 신고가, 직전거래 대비 상승·하락, 3년 최고·최저, 전세가율을 매일 갱신해요.',
+    body: `<h1>오늘 실거래가</h1>
+<p class="lead">최근 신고된 아파트 거래를 직전거래·3년 최고/최저·전세가율과 함께 보여줘요. 매일 새벽 국토교통부 자료로 갱신돼요.</p>
+<nav class="menu" aria-label="보기 선택">${views.map(([v, t]) => `<button type="button" data-v="${v}" aria-pressed="false">${t}</button>`).join('')}</nav>
+<div class="card filters">
+<label>시도<select id="sd"></select></label><label>시군구<select id="sg"></select></label><label>읍면동<select id="um"><option value="">전체 읍면동</option></select></label>
+<label>평형(전용)<select id="bd"><option value="">전체 면적</option><option value="0">60㎡ 이하 (~25평)</option><option value="1">60~85㎡ (25~33평)</option><option value="2">85~135㎡ (33~50평)</option><option value="3">135㎡ 초과</option></select></label>
+<label>기간<select id="dt"></select></label><button type="button" id="go">리스트 보기</button></div>
+<p id="sum" class="sum" aria-live="polite"></p>
+<p class="badges hint">표시: <span class="b t">매매</span><span class="b g">직거래</span><span class="b fire">🔥신고가</span><span class="b x">계약 취소</span> · 가격 단위 만원 (6억2800 = 6억 2,800만원)</p>
+<ol id="list" class="deals"></ol>
+<button type="button" id="more" class="more" hidden>더 보기</button>
+<p class="hint">신고가: 같은 단지·같은 전용면적(㎡ 반올림)에서 계약일이 더 이른 거래(최대 3년)의 최고가를 넘은 거래. 3년 최고·최저도 그 거래보다 이른 계약만 셉니다. “N일 후 등록됨”은 이 사이트가 처음 확인한 날 기준이에요.</p>
+<script type="application/json" id="regions">${JSON.stringify(regions.map((r) => [r.code, r.sido, r.name])).replace(/</g, '\\u003c')}</script>
+<script src="/today.js" defer></script>` });
+}
+
 async function pool(items, n, fn) {
   let i = 0;
   await Promise.all(Array.from({ length: n }, async () => { while (i < items.length) await fn(items[i++]); }));
@@ -180,7 +281,18 @@ function bandTable(months, get, cols) { // months: [[ym, rows]]
   return table(head, rows);
 }
 
-function regionPage(reg, label, months, trade, rent, failed) {
+function recBox(d) { // 시군구 페이지의 '이 지역 신고가' 상자
+  const part = (kind, name) => {
+    const list = d.rec[kind].slice(0, 10);
+    const note = d.cov[kind] < RELIABLE ? ` <span class="hint">과거 데이터 수집 중(최근 ${d.cov[kind]}개월 기준)</span>` : '';
+    return `<p style="margin:10px 0 4px"><b>${name}</b> <span class="hint">최근 두 달 ${d.rec[kind].length}건</span>${note}</p>` + (list.length
+      ? '<ul class="rec">' + list.map((x) => `<li>${md(x.d)} ${esc(x.r.aptNm)} ${Math.round(+x.r.excluUseAr)}㎡ ${esc(x.r.floor)}층 <b>${fmtWon(x.p)}</b> <span class="up">▲${fmtWon(x.p - x.prev)}</span> <span class="hint">이전 ${fmtWon(x.prev)}(${esc(x.prevDate)})</span></li>`).join('') + '</ul>'
+      : '<p class="hint" style="margin:0">해당 거래가 없어요.</p>');
+  };
+  return `<div class="card"><b>🔥 이 지역 신고가</b> <a class="hint" href="/today/?c=${d.code}&amp;v=trec">오늘 실거래가에서 자세히 →</a>${part('t', '매매')}${part('r', '전세')}<p class="hint" style="margin:8px 0 0">같은 단지·같은 전용면적(㎡ 반올림)에서 계약일이 더 이른 거래의 최고가를 넘은 거래예요.</p></div>`;
+}
+
+function regionPage(reg, label, months, trade, rent, failed, d) {
   const sidoCode = reg.code.slice(0, 2);
   const [cur] = months;
   const liveT = (ym) => (trade[ym] || []).filter((r) => r.cdealType !== 'O');
@@ -191,6 +303,7 @@ function regionPage(reg, label, months, trade, rent, failed) {
 <h1>${esc(label)} 아파트 실거래가 ${ymLabel(cur)}</h1>
 <p class="lead">${esc(reg.sido)} ${esc(reg.name)}에서 최근 두 달(${months.map(ymLabel).join('·')}) 신고된 아파트 매매 <b>${nT}건</b>, 전월세 <b>${nR}건</b>이에요. 매일 새벽 국토교통부 자료로 갱신돼요.</p>`;
   if (failed) body += '<p class="warn">이번 갱신에서 일부 자료를 불러오지 못했어요. 내일 다시 갱신돼요.</p>';
+  if (d?.rec) body += recBox(d);
 
   const tm = months.map((ym) => [ym, liveT(ym)]);
   body += `<h2>면적대별 매매 중위가격</h2>` + bandTable(tm, (rs) => td(rs.length, 1) + td(rs.length ? fmtWon(median(rs.map((r) => toMan(r.dealAmount)))) : '-', 1), ['건수', '중위가격']);
@@ -267,6 +380,29 @@ function subDetail(x, models) {
     desc: `${x.HOUSE_NM} (${x.SUBSCRPT_AREA_CODE_NM}) 청약 접수 ${normDate(x.RCEPT_BGNDE)}~${normDate(x.RCEPT_ENDDE)}, 당첨자 발표 ${normDate(x.PRZWNER_PRESNATN_DE)}. 주택형별 공급세대와 분양가.` });
 }
 
+function recSection(recs, collecting, sidos) { // 홈 '최근 신고가' — 데이터는 JSON으로 싣고 화면은 JS로 그린다
+  const note = (k) => collecting[k].length ? `과거 데이터 수집 중(최근 ${collecting[k].minCov}개월 기준)인 ${collecting[k].length}곳은 빠져 있어요.` : '';
+  const data = JSON.stringify({ t: recs.t.slice(0, 3000), r: recs.r.slice(0, 3000), note: { t: note('t'), r: note('r') } }).replace(/</g, '\\u003c');
+  return `<h2>🔥 최근 신고가</h2>
+<p class="hint">최근 14일 계약 중 같은 단지·같은 전용면적(㎡ 반올림)에서 그 전 최고가를 넘은 거래예요. 매매는 해제 거래, 전세는 월세를 뺐어요.</p>
+<div class="tabs" role="tablist"><button type="button" role="tab" data-k="t" aria-selected="true">매매 <span class="c">${comma(recs.t.length)}</span></button><button type="button" role="tab" data-k="r" aria-selected="false">전세 <span class="c">${comma(recs.r.length)}</span></button>
+<select id="rec-sido" aria-label="시도 선택"><option value="">전국</option>${sidos.map((s) => `<option value="${s.code}">${esc(s.name)}</option>`).join('')}</select></div>
+<p class="hint" id="rec-note"></p>
+<div class="scroll"><table><thead><tr><th>계약일</th><th>지역</th><th>단지</th><th class="n">전용㎡</th><th class="n">층</th><th class="n" id="rec-ph">거래가</th><th class="n">이전 최고가</th><th class="n">상승</th></tr></thead><tbody id="rec-body"></tbody></table></div>
+<p id="rec-empty" class="hint" hidden>해당 거래가 없어요.</p>
+<button type="button" id="rec-more" class="more" hidden>더 보기</button>
+<script>(function(){var D=${data},k="t",n=100,$=function(i){return document.getElementById(i)};
+function w(m){m=Math.round(m);var e=Math.floor(m/10000),r=m%10000,c=function(x){return String(x).replace(/\\B(?=(\\d{3})+(?!\\d))/g,",")};return e?e+"억"+(r?" "+c(r)+"만":""):c(r)+"만"}
+function h(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function d(s){return +s.slice(5,7)+"."+ +s.slice(8)}
+function draw(){var sd=$("rec-sido").value,L=D[k].filter(function(x){return!sd||x[0]===sd});
+$("rec-ph").textContent=k==="t"?"거래가":"보증금";$("rec-note").textContent=D.note[k];
+$("rec-body").innerHTML=L.slice(0,n).map(function(x){return"<tr><td>"+d(x[9])+"</td><td><a href=\\"/apt/"+x[2]+"/\\">"+h(x[1])+"</a></td><td>"+h(x[3])+"</td><td class=n>"+x[4]+"</td><td class=n>"+h(x[5])+"</td><td class=n><b>"+w(x[6])+"</b></td><td class=n>"+w(x[7])+"<br><span class=hint>"+h(x[8])+"</span></td><td class=n><span class=up>▲"+w(x[6]-x[7])+"</span><br><span class=hint>+"+((x[6]-x[7])/x[7]*100).toFixed(1)+"%</span></td></tr>"}).join("");
+$("rec-empty").hidden=L.length>0;$("rec-more").hidden=L.length<=n}
+[].forEach.call(document.querySelectorAll(".tabs [data-k]"),function(b){b.onclick=function(){k=b.dataset.k;n=100;[].forEach.call(document.querySelectorAll(".tabs [data-k]"),function(x){x.setAttribute("aria-selected",x===b)});draw()}});
+$("rec-sido").onchange=function(){n=100;draw()};$("rec-more").onclick=function(){n+=100;draw()};draw()})();</script>`;
+}
+
 // ---------- 메인 ----------
 async function main() {
   if (!FIX && !process.env.DATA_GO_KR_KEY) throw fatal('DATA_GO_KR_KEY 환경변수가 없어요 (fixture로 보려면 --fixtures)');
@@ -277,6 +413,7 @@ async function main() {
   const ymOf = (d) => d.toISOString().slice(0, 7).replace('-', '');
   const months = [ymOf(kst), ymOf(new Date(Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth() - 1, 1)))];
   const since = new Date(kst.getTime() - 60 * 86400e3).toISOString().slice(0, 10);
+  const months36 = ymOf(new Date(Date.UTC(kst.getUTCFullYear(), kst.getUTCMonth() - 35, 1))); // 36개월 창의 첫 달
 
   const regions = JSON.parse(fs.readFileSync(path.join(__dirname, 'regions.json'), 'utf8'));
   const nameCount = {};
@@ -285,7 +422,7 @@ async function main() {
   const label = (r) => (nameCount[r.name] > 1 ? `${SIDO_SHORT[r.sido] || r.sido} ${r.name}` : r.name);
 
   // 1) 실거래 (매매·전월세)
-  const data = Object.fromEntries(regions.map((r) => [r.code, { trade: {}, rent: {}, failed: false }]));
+  const data = Object.fromEntries(regions.map((r) => [r.code, { code: r.code, trade: {}, rent: {}, failed: false }]));
   const tasks = regions.flatMap((r) => months.flatMap((ym) => [['trade', 'RTMSDataSvcAptTradeDev'], ['rent', 'RTMSDataSvcAptRent']].map(([k, op]) => ({ r, ym, k, op }))));
   const failures = [];
   await pool(tasks, FIX ? 1 : (+process.env.CONC || 3), async (t) => {
@@ -297,6 +434,39 @@ async function main() {
   });
   failures.forEach((f) => console.warn('⚠️', f));
   if (failures.length > Math.max(10, tasks.length * 0.1)) throw fatal(`실거래 호출 실패가 너무 많아요 (${failures.length}/${tasks.length})`);
+
+  // 1-1) 신고가·지역 JSON: 최근 두 달을 저장소에 덮어쓰고, 각 거래를 그보다 이른 거래와 비교
+  const since14 = new Date(kst.getTime() - 14 * 86400e3).toISOString().slice(0, 10);
+  const recs = { t: [], r: [] }, events = [];
+  for (const r of regions) {
+    const h = FIX ? emptyHist() : loadHist(r.code), d = data[r.code];
+    d.rec = {}; d.cov = {};
+    for (const kind of ['t', 'r']) {
+      const H = h[kind], src = d[kind === 't' ? 'trade' : 'rent'];
+      pruneHist(H, months36);
+      for (const ym of months) if (src[ym]) putMonth(H, ym, kind, src[ym]);
+      const found = findRecords(kind, months.flatMap((ym) => src[ym] || []), H).sort((a, b) => b.d.localeCompare(a.d));
+      d.rec[kind] = found; d.cov[kind] = H.m.length;
+      for (const x of found) {
+        events.push({ kind, code: r.code, key: x.key, d: x.d, p: x.p, prev: x.prev, prevDate: x.prevDate, floor: x.r.floor });
+        if (d.cov[kind] >= RELIABLE && x.d >= since14) recs[kind].push([r.code.slice(0, 2), `${SIDO_SHORT[r.sido] || r.sido} ${r.name}`, r.code, x.r.aptNm, +x.r.excluUseAr, x.r.floor, x.p, x.prev, x.prevDate, x.d]);
+      }
+    }
+    const j = dealRows(d, h, months, today, h.seen);
+    h.seen = j.seen;
+    d.json = JSON.stringify({ code: r.code, sido: r.sido, name: r.name, date: today, cov: d.cov, deals: j.deals, K: j.K });
+    if (!FIX) saveHist(r.code, h);
+  }
+  const collecting = { t: regions.filter((r) => data[r.code].cov.t < RELIABLE), r: regions.filter((r) => data[r.code].cov.r < RELIABLE) };
+  for (const k of ['t', 'r']) collecting[k].minCov = Math.min(...collecting[k].map((r) => data[r.code].cov[k]));
+  if (!FIX) { // 감지 기록: 처음 본 날(seen)과 함께 180일 보관
+    const ef = path.join(HIST, 'events.json');
+    let old = []; try { old = JSON.parse(fs.readFileSync(ef, 'utf8')); } catch {}
+    const id = (e) => [e.kind, e.code, e.key, e.d, e.p, e.floor].join('|'), seen = new Set(old.map(id));
+    const cut = new Date(kst.getTime() - 180 * 86400e3).toISOString().slice(0, 10);
+    fs.writeFileSync(ef, JSON.stringify([...old.filter((e) => e.seen >= cut), ...events.filter((e) => !seen.has(id(e))).map((e) => ({ ...e, seen: today }))]));
+  }
+  for (const k of ['t', 'r']) recs[k].sort((a, b) => b[9].localeCompare(a[9]) || b[6] - a[6]);
 
   // 2) 청약홈 APT 분양정보 + 주택형
   const subs = (await odcloud('getAPTLttotPblancDetail', { 'cond[RCRIT_PBLANC_DE::GTE]': since }, 'applyhome_detail.json'))
@@ -324,12 +494,14 @@ async function main() {
     if (!noindex) indexable.push(p);
   };
   fs.mkdirSync(OUT, { recursive: true });
-  for (const f of ['style.css', 'CNAME']) fs.copyFileSync(path.join(__dirname, f), path.join(OUT, f));
+  for (const f of ['style.css', 'CNAME', 'today.js']) fs.copyFileSync(path.join(__dirname, f), path.join(OUT, f));
 
+  fs.mkdirSync(path.join(OUT, 'data'));
   const sidos = [];
   for (const r of regions) {
     const d = data[r.code];
-    const pg = regionPage(r, label(r), months, d.trade, d.rent, d.failed);
+    fs.writeFileSync(path.join(OUT, 'data', r.code + '.json'), d.json);
+    const pg = regionPage(r, label(r), months, d.trade, d.rent, d.failed, d);
     write(`/apt/${r.code}/`, pg.html, pg.noindex);
     r.nT = pg.nT; r.nR = pg.nR;
     r.nCur = (d.trade[months[0]] || []).filter((x) => x.cdealType !== 'O').length;
@@ -349,6 +521,8 @@ ${table(['시·군·구', `${ymLabel(months[0]).slice(6)} 매매 `, '2개월 매
       desc: `${s.name} 시군구별 아파트 매매 실거래가와 전월세 신고 현황. 최근 두 달 ${nT}건, 매일 갱신.` }));
     s.nT = nT;
   }
+
+  write('/today/', todayPage(regions));
 
   // 청약
   const open = subs.filter((x) => normDate(x.PRZWNER_PRESNATN_DE || x.RCEPT_ENDDE) >= today).sort((a, b) => normDate(a.RCEPT_BGNDE).localeCompare(normDate(b.RCEPT_BGNDE)));
@@ -379,6 +553,8 @@ ${table(['시·군·구', `${ymLabel(months[0]).slice(6)} 매매 `, '2개월 매
     desc: '전국 시군구 아파트 매매·전월세 실거래가, 청약홈 분양 일정, LH 분양·임대 공고를 공공데이터로 매일 새벽 갱신해요.',
     body: `<h1>부동산 알리미</h1>
 <p class="lead">전국 아파트 실거래가와 청약·LH 공고를 공공데이터로 매일 새벽 모아 보여줘요.</p>
+${recSection(recs, collecting, sidos)}
+<p><a class="cta" href="/today/">📋 오늘 실거래가 — 시군구·읍면동별 매매·전세·월세, 상승·하락 거래 보기 →</a></p>
 <h2>🏢 지역별 아파트 실거래가 (${months.map(ymLabel).join('·')})</h2>
 <ul class="chips">${sidos.map((s) => `<li><a href="/apt/${s.code}/">${esc(s.name)} <span class="c">${comma(s.nT)}건</span></a></li>`).join('')}</ul>
 <h2>📝 접수 중·예정 청약 (${open.length}곳)</h2>${table(SUB_HEAD, open.slice(0, 8).map(subRow))}
@@ -402,5 +578,5 @@ ${table(['시·군·구', `${ymLabel(months[0]).slice(6)} 매매 `, '2개월 매
   console.log('API 호출 수:', FIX ? '(fixtures)' : JSON.stringify(calls));
 }
 
-module.exports = { fmtWon, median, normDate, areaBand, parseRtms, toMan };
+module.exports = { fmtWon, median, normDate, areaBand, parseRtms, toMan, recKey, recPrice, putMonth, priorStats, findRecords, dealRows, pruneHist, emptyHist, loadHist, saveHist, rtms, calls, pool, RELIABLE, HIST };
 if (require.main === module) main().catch((e) => { console.error('❌ 빌드 실패:', e.message); process.exit(1); });

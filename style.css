@@ -37,3 +37,34 @@ td.n,th.n{text-align:right;white-space:nowrap}
 .chips a{display:inline-block;border:1px solid var(--line);background:var(--card);border-radius:999px;padding:6px 12px;text-decoration:none}
 .chips .c{color:var(--muted);font-size:.8rem}
 .src{font-size:.8rem;color:var(--muted)}
+/* 신고가·오늘 실거래가 */
+:root{--up:#d6322a;--down:#1f5fbf}
+.up{color:var(--up);font-weight:700}.down{color:var(--down);font-weight:700}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+.tabs button,.menu button,button.more,#go{width:auto;margin:0;padding:8px 14px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);font-size:.95rem;font-weight:600}
+.tabs button[aria-selected=true],.menu button[aria-pressed=true]{background:var(--brand);border-color:var(--brand);color:#fff}
+.tabs button[aria-selected=true] .c{color:#dfeeee}
+.tabs select{width:auto;flex:1;min-width:120px;padding:8px}
+button.more{display:block;margin:12px auto;padding:10px 28px}
+#go{background:var(--accent);border-color:var(--accent);color:#fff;align-self:end;padding:12px 18px}
+.rec{margin:4px 0 0;padding-left:18px;font-size:.9rem}
+.cta{display:block;background:var(--card);border:1px solid var(--brand);border-radius:12px;padding:12px 14px;text-decoration:none;font-weight:700}
+.menu{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px;margin:12px 0}
+.menu button{border-radius:10px;padding:10px 8px}
+.filters{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.filters label{margin:0;font-size:.85rem}
+.filters select{padding:9px;margin-top:4px}
+.sum{font-size:.95rem;margin:12px 0 4px}
+.b{display:inline-block;font-size:.75rem;font-weight:700;border:1px solid var(--line);border-radius:6px;padding:1px 6px;margin-right:4px;background:var(--card)}
+.b.t{border-color:var(--brand);color:var(--brand)}.b.j,.b.w{border-color:var(--muted);color:var(--muted)}
+.b.g{border-color:#8a5cf6;color:#8a5cf6}.b.fire{border-color:var(--up);color:var(--up)}.b.x{background:var(--muted);color:var(--card);border-color:var(--muted)}
+.deals{list-style:none;padding:0;margin:8px 0}
+.deal{display:grid;grid-template-columns:76px 1fr;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;margin:10px 0}
+.dl{text-align:center;color:var(--brand)}.rank{display:block;font-size:.95rem;color:var(--ink);margin-bottom:4px}
+.spark{display:block;margin:0 auto;font-size:.7rem}
+.dm h3{margin:0;font-size:1.1rem}.dm p{margin:2px 0}.addr{font-size:.8rem}
+.price{font-size:1.5rem;font-weight:800}.price span{font-size:.9rem}
+.chips.sm{margin:4px 0;gap:4px}.chips.sm li{border:1px solid var(--line);border-radius:999px;padding:1px 8px;font-size:.8rem}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:6px 0 0;font-size:.85rem}.kv dt{color:var(--muted)}.kv dd{margin:0}
+@media (prefers-color-scheme:dark){:root{--up:#ff6b61;--down:#6ea8ff}}
+[hidden]{display:none!important}
