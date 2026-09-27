@@ -83,3 +83,8 @@ tr.cx td{color:var(--muted)}
 section{scroll-margin-top:12px}
 .chart path.dt,.chart path.dj{fill:none;stroke-width:6;stroke-linecap:round}.chart path.dt{stroke:var(--brand)}.chart path.dj{stroke:var(--ok)}
 .nw td:first-child,td.nw{white-space:nowrap}
+/* 좁은 화면: 격자·줄 안 내용이 페이지 폭을 밀어내지 않게 */
+.deal{grid-template-columns:76px minmax(0,1fr)}.dm{min-width:0;overflow-wrap:anywhere}
+.filters>*,.filters select,.tabs select{min-width:0;max-width:100%}
+.tabs select{flex:1 1 120px}
+@media (max-width:420px){.filters{grid-template-columns:1fr 1fr}.deal{grid-template-columns:64px minmax(0,1fr);gap:8px;padding:10px}}

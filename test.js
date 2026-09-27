@@ -75,4 +75,17 @@ assert.deepStrictEqual(rec('t', [T(20, '90,000')], [aug(1, '90,000')]), []);    
 }
 assert.deepStrictEqual(jeonseMedian([[20260801, 50000, 3], [20260901, 60000, 5], [20260910, 90000, 7, 1], [20250101, 10000, 1]], 20260915), [55000, 2]); // 6개월·갱신 제외
 
+// 홈 최근 신고가: 기본 상승률(이전 최고 대비) 높은 순, 같으면 최신 계약 먼저
+{ const { REC_SORT, recCard } = require('./build.js');
+  const R = (id, p, prev, d) => ['11', '서울 강남구', '11680', id, 84.9, '10', p, prev, '2026-01-02', d, '11680-1', '대치동', 2000, 0, [90000, 100000]];
+  const L = [R('a', 110000, 100000, '2026-09-10'), R('b', 200000, 150000, '2026-09-01'), R('c', 220000, 200000, '2026-09-20'), R('d', 105000, 100000, '2026-09-25')];
+  const ids = (k) => L.slice().sort(REC_SORT[k]).map((x) => x[3]).join('');
+  assert.strictEqual(ids('rate'), 'bcad');                                                         // 33.3% > 10%(9/20) = 10%(9/10) > 5%
+  assert.strictEqual(ids('amt'), 'bcad');
+  assert.strictEqual(ids('new'), 'dcab');
+  const h = recCard(L[1], 0, 't', 2026);
+  assert.ok(h.includes('1위') && h.includes('<svg class="spark"') && h.includes('+33.3%') && h.includes('27년차') && h.includes('이전 최고가') && h.includes('/apt/11680-1/#a85'));
+  const sec = require('./build.js').recSection({ t: L, r: [] }, { t: [], r: [] }, [], 2026);                     // 홈에 싣는 스크립트가 문법 오류 없이 파싱되는지
+  new Function(sec.html.match(/<script>([\s\S]*)<\/script>/)[1]); assert.strictEqual(JSON.parse(sec.json).t.length, 4); }
+
 console.log('test.js: 모두 통과');
