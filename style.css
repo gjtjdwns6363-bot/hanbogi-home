@@ -68,3 +68,16 @@ button.more{display:block;margin:12px auto;padding:10px 28px}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:6px 0 0;font-size:.85rem}.kv dt{color:var(--muted)}.kv dd{margin:0}
 @media (prefers-color-scheme:dark){:root{--up:#ff6b61;--down:#6ea8ff}}
 [hidden]{display:none!important}
+.menu a{display:block;text-align:center;border:1px solid var(--line);border-radius:10px;padding:9px 6px;background:var(--card);text-decoration:none;font-weight:600;color:var(--ink)}
+.menu a[aria-current=page],.chips a[aria-current=page]{background:var(--brand);border-color:var(--brand);color:#fff}
+.menu{grid-template-columns:repeat(auto-fill,minmax(96px,1fr))}
+.filters .chk{display:flex;align-items:center;gap:6px;font-weight:600}.filters .chk input{width:auto}
+#share{width:auto;margin:0;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font-size:.9rem;font-weight:600;align-self:end}
+.b.ok{border-color:var(--ok);color:var(--ok)}
+.deal.cx .price{text-decoration:line-through;color:var(--muted)}
+.chart{width:100%;height:auto;font-size:11px;fill:var(--muted)}
+.chart .grid{stroke:var(--line)}.chart .med{stroke:var(--brand);stroke-width:2}
+.chart .dt,.dot.dt{fill:var(--brand);background:var(--brand)}.chart .dj,.dot.dj{fill:var(--ok);background:var(--ok);opacity:.7}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%}
+tr.cx td{color:var(--muted)}
+section{scroll-margin-top:12px}

@@ -1,7 +1,7 @@
 // node test.js — 핵심 순수 함수 검사
 const assert = require('assert');
 const fs = require('fs');
-const { fmtWon, median, normDate, areaBand, parseRtms, toMan, recKey, putMonth, findRecords, emptyHist } = require('./build.js');
+const { fmtWon, median, normDate, areaBand, parseRtms, toMan, recKey, putMonth, findRecords, emptyHist, dealRows, chg, pct, jeonseMedian } = require('./build.js');
 
 assert.strictEqual(fmtWon(123500), '12억 3,500만');
 assert.strictEqual(fmtWon(120000), '12억');
@@ -53,5 +53,26 @@ assert.deepStrictEqual(rec('r', [J(20, '60,000', '0')], [J(1, '50,000', '0', { d
 assert.deepStrictEqual(rec('r', [J(20, '99,000', '50')], [J(1, '50,000', '0', { dealMonth: '8' })]), []);
 { const H = emptyHist().t; putMonth(H, '202609', 't', [T(5, '100,000'), T(6, '100,000')]); putMonth(H, '202609', 't', [T(5, '100,000')]); // 같은 달 다시 넣으면 교체
   assert.strictEqual(H.k[recKey(T(1, 1))].length, 1); assert.deepStrictEqual(H.m, ['202609']); }
+
+// 벤치마킹 명세 검증
+assert.deepStrictEqual(chg(62800, 61500), [1300, '2.1']);                                       // 변동률 +2.1%
+assert.strictEqual(pct(62800, 74000), 85);                                                       // 최고가 대비 85%
+assert.deepStrictEqual(rec('t', [T(20, '90,000')], [aug(1, '90,000')]), []);                 // 동률은 신고가 아님
+{ // 직전거래·신고가 표시: 해제 제외, 같은 날 여러 건이어도 한 줄씩, firstSeen 고정
+  const h = emptyHist(), rows = [T(10, '90,000'), T(10, '91,000', { floor: '3' }), T(12, '99,000', { cdealType: 'O', cdealDay: '26.09.20' }), T(15, '95,000')];
+  putMonth(h.t, '202609', 't', rows);
+  const d = { trade: { 202609: rows }, rent: {} };
+  const a = dealRows(d, h, ['202609'], '2026-09-26', {}, {});
+  assert.strictEqual(a.deals.length, 4);                                                          // 중복 행 없음
+  const last = a.deals[3];
+  assert.strictEqual(last.pv[0], 91000);                                                          // 직전 = 9/10 (해제된 9/12 99,000 제외)
+  assert.strictEqual(last.hi[0], 91000); assert.strictEqual(last.r, 1);
+  assert.strictEqual(a.deals[2].cd, '2026-09-20'); assert.ok(!a.deals[2].r);                          // 해제일 표시, 해제는 신고가 아님
+  assert.strictEqual(last.s, '2026-09-26');
+  const b = dealRows(d, h, ['202609'], '2026-09-27', a.seen, a.seenX);                        // 다음 날 다시 빌드해도
+  assert.strictEqual(b.deals[3].s, '2026-09-26');                                                 // 공개일은 그대로
+  assert.strictEqual(dealRows(d, h, ['202609'], '2026-09-26', undefined).deals[3].s, undefined);    // 첫 수집 날은 기준선(공개일 없음)
+}
+assert.deepStrictEqual(jeonseMedian([[20260801, 50000, 3], [20260901, 60000, 5], [20260910, 90000, 7, 1], [20250101, 10000, 1]], 20260915), [55000, 2]); // 6개월·갱신 제외
 
 console.log('test.js: 모두 통과');

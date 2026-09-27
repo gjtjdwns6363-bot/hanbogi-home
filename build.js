@@ -142,7 +142,7 @@ function putMonth(H, ym, kind, rows) { // 그 달 기록을 통째로 새 자료
     const l = H.k[k].filter((e) => String(e[0]).slice(0, 6) !== ym);
     if (l.length) H.k[k] = l; else delete H.k[k];
   }
-  for (const r of rows) { const p = recPrice(kind, r); if (p) (H.k[recKey(r)] ||= []).push([d8n(r), p, parseInt(r.floor, 10) || 0]); }
+  for (const r of rows) { const p = recPrice(kind, r); if (p) (H.k[recKey(r)] ||= []).push(kind === 'r' && (r.contractType || '').trim() === '갱신' ? [d8n(r), p, parseInt(r.floor, 10) || 0, 1] : [d8n(r), p, parseInt(r.floor, 10) || 0]); } // 전세 4번째 1 = 갱신
   if (!H.m.includes(ym)) H.m.push(ym);
 }
 function priorStats(list, d) { // 계약일 d보다 "이른" 거래만: 직전거래·최고·최저. 없으면 null
@@ -179,28 +179,41 @@ function pruneHist(H, fromYm) { // 36개월보다 오래된 달은 버린다
   for (const k of Object.keys(H.k)) { const l = H.k[k].filter((e) => e[0] >= min); if (l.length) H.k[k] = l; else delete H.k[k]; }
 }
 
-// /data/<시군구>.json 의 거래 목록: v t=매매 j=전세 w=월세, pv/hi/lo/o = [만원, 층, 날짜], k = 추이(K) 번호, s = 처음 본 날
-function dealRows(d, h, months, today, seenOld) {
-  const out = [], K = [], ki = {}, seen = {};
-  const sp = (l) => (l || []).slice().sort((a, b) => a[0] - b[0]).slice(-24).map((e) => [e[0], e[1]]);
-  const kIdx = (key) => (key in ki ? ki[key] : (K.push({ t: sp(h.t.k[key]), j: sp(h.r.k[key]) }), (ki[key] = K.length - 1)));
+// ---------- 거래 카드 데이터 ----------
+// 한 시군구의 최근 두 달 거래: v t=매매 j=전세 w=월세, pv/hi/lo/o = [만원, 층, 날짜], s = 처음 수집한 날(고정), sx = 해제를 처음 본 날
+const chg = (p, base) => [p - base, ((p - base) / base * 100).toFixed(1)]; // 62800, 61500 → [1300, '2.1']
+const pct = (a, b) => Math.round(a / b * 100);
+const back6 = (dn) => +new Date(Date.UTC(Math.floor(dn / 10000), (Math.floor(dn / 100) % 100) - 7, dn % 100)).toISOString().slice(0, 10).replace(/-/g, '');
+const monthly = (l) => { // 월별 중위값 [yyyymm, 만원]
+  const by = {}; for (const e of l || []) (by[Math.floor(e[0] / 100)] ||= []).push(e[1]);
+  return Object.keys(by).sort().map((m) => [+m, median(by[m])]);
+};
+const jeonseMedian = (l, dn) => { // 계약일 전 6개월 전세(갱신 제외) 중위값
+  const js = (l || []).filter((e) => e[0] <= dn && e[0] > back6(dn) && e[3] !== 1).map((e) => e[1]);
+  return js.length ? [median(js), js.length] : null;
+};
+const ymdAny = (s) => { s = String(s || '').trim(); return normDate(s) || (/^\d{2}\.\d{2}\.\d{2}$/.test(s) ? '20' + s.replace(/\./g, '-') : ''); };
+function dealRows(d, h, months, today, seenOld, seenXOld) {
+  const out = [], seen = {}, seenX = {}, spk = {};
   const latest = (l) => (l || []).reduce((a, e) => (!a || e[0] > a[0] ? e : a), null);
   const pfd = (e) => [e[1], e[2], d8s(e[0])];
   const push = (v, r) => {
     const key = recKey(r), dn = d8n(r), x = r.cdealType === 'O', p = toMan(v === 't' ? r.dealAmount : r.deposit);
-    const o = { v, a: r.aptNm, u: r.umdNm, y: +r.buildYear || 0, ar: +r.excluUseAr, f: r.floor, d: d8s(dn), p };
-    const id = [v, key, dn, p, r.floor, r.monthlyRent].join('|');
-    seen[id] = seenOld ? (seenOld[id] ?? today) : ''; // 저장소 첫 실행 날은 기준선('')
+    const o = { v, key, q: (r.aptSeq || '').trim(), a: r.aptNm, u: r.umdNm, y: +r.buildYear || 0, ar: +r.excluUseAr, f: r.floor, d: d8s(dn), p };
+    const id = [v, key, dn, p, r.floor, r.monthlyRent, (r.aptDong || '').trim()].join('|');
+    seen[id] = seenOld ? (seenOld[id] ?? today) : ''; // 저장소 첫 실행 날은 기준선('') — 한 번 정한 날짜는 안 바뀐다
     if (seen[id]) o.s = seen[id];
+    if (x) { seenX[id] = seenXOld ? (seenXOld[id] ?? today) : ''; if (seenX[id]) o.sx = seenX[id]; o.x = 1; o.cd = ymdAny(r.cdealDay); }
     if (v === 'w') o.m = toMan(r.monthlyRent);
     else {
-      const st = priorStats((v === 't' ? h.t : h.r).k[key], dn), oth = latest((v === 't' ? h.r : h.t).k[key]);
-      if (st) { o.pv = pfd(st.prev); o.hi = pfd(st.hi); o.lo = pfd(st.lo); if (!x && p > st.hi[1]) o.r = 1; }
+      const H = v === 't' ? h.t : h.r, st = priorStats(H.k[key], dn), oth = latest((v === 't' ? h.r : h.t).k[key]);
+      if (st) { o.pv = pfd(st.prev); o.hi = pfd(st.hi); o.lo = pfd(st.lo); if (!x && p > st.hi[1]) o.r = 1; else if (!x && p === st.hi[1]) o.tie = 1; }
       if (oth) o.o = pfd(oth);
-      o.k = kIdx(key);
+      if (v === 't') { const jr = jeonseMedian(h.r.k[key], dn); if (jr) o.jr = jr; }
+      o.sp = spk[v + key] ||= monthly(H.k[key]);
     }
-    if (v !== 't' && r.contractType?.trim()) o.ct = r.contractType.trim();
-    if (x) o.x = 1;
+    if (v !== 't') { o.ct = (r.contractType || '').trim(); o.rr = (r.useRRRight || '').trim(); o.pd = toMan(r.preDeposit); o.pm = toMan(r.preMonthlyRent); o.term = (r.contractTerm || '').trim(); }
+    else { o.rg = ymdAny(r.rgstDate); o.dg = (r.aptDong || '').trim(); }
     if (r.dealingGbn === '직거래') o.g = 1;
     out.push(o);
   };
@@ -208,27 +221,166 @@ function dealRows(d, h, months, today, seenOld) {
     for (const r of d.trade[ym] || []) push('t', r);
     for (const r of d.rent[ym] || []) push(toMan(r.monthlyRent) ? 'w' : 'j', r);
   }
-  return { deals: out, K, seen };
+  return { deals: out, seen, seenX };
 }
 
-function todayPage(regions) {
-  const views = [['tr', '매매 실거래'], ['trec', '🔥 매매 신고가'], ['up', '매매 상승거래'], ['down', '매매 하락거래'], ['j', '전세 실거래'], ['jrec', '🔥 전세 신고가'], ['w', '월세 실거래']];
-  return page({ title: '오늘 아파트 실거래가 | 신고가·상승·하락 거래 | 부동산 알리미', p: '/today/',
-    desc: '시군구·읍면동별 최근 신고된 아파트 매매·전세·월세 실거래와 신고가, 직전거래 대비 상승·하락, 3년 최고·최저, 전세가율을 매일 갱신해요.',
-    body: `<h1>오늘 실거래가</h1>
-<p class="lead">최근 신고된 아파트 거래를 직전거래·3년 최고/최저·전세가율과 함께 보여줘요. 매일 새벽 국토교통부 자료로 갱신돼요.</p>
-<nav class="menu" aria-label="보기 선택">${views.map(([v, t]) => `<button type="button" data-v="${v}" aria-pressed="false">${t}</button>`).join('')}</nav>
-<div class="card filters">
-<label>시도<select id="sd"></select></label><label>시군구<select id="sg"></select></label><label>읍면동<select id="um"><option value="">전체 읍면동</option></select></label>
-<label>평형(전용)<select id="bd"><option value="">전체 면적</option><option value="0">60㎡ 이하 (~25평)</option><option value="1">60~85㎡ (25~33평)</option><option value="2">85~135㎡ (33~50평)</option><option value="3">135㎡ 초과</option></select></label>
-<label>기간<select id="dt"></select></label><button type="button" id="go">리스트 보기</button></div>
-<p id="sum" class="sum" aria-live="polite"></p>
-<p class="badges hint">표시: <span class="b t">매매</span><span class="b g">직거래</span><span class="b fire">🔥신고가</span><span class="b x">계약 취소</span> · 가격 단위 만원 (6억2800 = 6억 2,800만원)</p>
-<ol id="list" class="deals"></ol>
-<button type="button" id="more" class="more" hidden>더 보기</button>
-<p class="hint">신고가: 같은 단지·같은 전용면적(㎡ 반올림)에서 계약일이 더 이른 거래(최대 3년)의 최고가를 넘은 거래. 3년 최고·최저도 그 거래보다 이른 계약만 셉니다. “N일 후 등록됨”은 이 사이트가 처음 확인한 날 기준이에요.</p>
-<script type="application/json" id="regions">${JSON.stringify(regions.map((r) => [r.code, r.sido, r.name])).replace(/</g, '\\u003c')}</script>
-<script src="/today.js" defer></script>` });
+// ---------- 렌더: 카드 · 차트 ----------
+const ymd2 = (s) => (s ? s.slice(2).replace(/-/g, '.') : '');
+const daysBetween = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
+const pyeong = (ar) => Math.round(ar * 1.33 / 3.3058); // 전용 → 관습적 공급평형(대략)
+const man = (n) => fmtWon(n).replace(/만$/, '');     // 표 안 금액: "6억 2,800"
+function sparkSvg(pts) {
+  if (!pts || pts.length < 2) return '<span class="spark hint">추이 없음</span>';
+  const W = 72, H = 40, ps = pts.map((e) => e[1]), lo = Math.min(...ps), hi = Math.max(...ps);
+  const xy = pts.map((e, i) => [2 + i * (W - 4) / (pts.length - 1), H - 3 - (hi === lo ? (H - 6) / 2 : (e[1] - lo) * (H - 6) / (hi - lo))].map((v) => v.toFixed(1)));
+  const last = xy[xy.length - 1];
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="월별 중위가 추이 ${pts.length}개월, 최저 ${fmtWon(lo)} 최고 ${fmtWon(hi)}"><polyline fill="none" stroke="currentColor" stroke-width="1.5" points="${xy.map((p) => p.join(',')).join(' ')}"/><circle cx="${last[0]}" cy="${last[1]}" r="2.5"/></svg>`;
+}
+function chartSvg(trade, jeonse) { // 개별 거래 점(매매·전세) + 매매 월 중위선
+  const all = [...(trade || []), ...(jeonse || [])];
+  if (all.length < 2) return '';
+  const W = 640, H = 220, L = 58, B = 22, ds = all.map((e) => Date.parse(d8s(e[0]))), ps = all.map((e) => e[1]);
+  const x0 = Math.min(...ds), x1 = Math.max(...ds), y0 = Math.min(...ps) * 0.95, y1 = Math.max(...ps) * 1.05;
+  const X = (d) => (L + (x1 === x0 ? 0.5 : (Date.parse(d8s(d)) - x0) / (x1 - x0)) * (W - L - 8)).toFixed(1);
+  const Y = (p) => (H - B - (p - y0) / (y1 - y0 || 1) * (H - B - 8)).toFixed(1);
+  const dots = (l, c) => (l || []).map((e) => `<circle class="${c}" cx="${X(e[0])}" cy="${Y(e[1])}" r="3"><title>${d8s(e[0])} ${fmtWon(e[1])} ${e[2]}층</title></circle>`).join('');
+  const line = monthly(trade).map(([m, p]) => `${X(m * 100 + 15)},${Y(p)}`).join(' ');
+  const ticks = [y0, (y0 + y1) / 2, y1].map((p) => `<text x="${L - 6}" y="${Y(p)}" text-anchor="end" dy="4">${man(Math.round(p / 100) * 100)}</text><line x1="${L}" x2="${W - 8}" y1="${Y(p)}" y2="${Y(p)}" class="grid"/>`).join('');
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="매매·전세 거래 가격 추이 ${new Date(x0).toISOString().slice(0, 7)}~${new Date(x1).toISOString().slice(0, 7)}">${ticks}
+<text x="${L}" y="${H - 5}">${new Date(x0).toISOString().slice(0, 7)}</text><text x="${W - 8}" y="${H - 5}" text-anchor="end">${new Date(x1).toISOString().slice(0, 7)}</text>
+${line.includes(' ') ? `<polyline class="med" fill="none" points="${line}"/>` : ''}${dots(jeonse, 'dj')}${dots(trade, 'dt')}</svg>
+<p class="hint"><span class="dot dt"></span> 매매 <span class="dot dj"></span> 전세(갱신 포함) · 선 = 매매 월 중위가</p>`;
+}
+const pfdH = (e) => `${fmtWon(e[0])} (${esc(e[1])}층) <span class="hint">${ymd2(e[2])}</span>`;
+const chgH = (p, base) => { const [dd, pc] = chg(p, base); return dd > 0 ? `<span class="up">▲ ${man(dd)} (+${pc}%)</span>` : dd < 0 ? `<span class="down">▼ ${man(-dd)} (${pc}%)</span>` : '<span class="hint">변동 없음</span>'; };
+function cardHtml(o, i, reg, yr) {
+  const sale = o.v === 't', q = encodeURIComponent(`${reg.name} ${o.u} ${o.a}`), a = Math.round(o.ar);
+  const hiI = o.hi && !o.x && o.p > o.hi[0] ? [o.p, o.f, o.d] : o.hi, loI = o.lo && !o.x && o.p < o.lo[0] ? [o.p, o.f, o.d] : o.lo; // 이번 거래 포함 3년 최고·최저
+  const c = o.pv && !o.x ? (o.p - o.pv[0]) / o.pv[0] * 100 : '';
+  let s = `<li class="deal${o.x ? ' cx' : ''}" data-u="${esc(o.u)}" data-ar="${o.ar}" data-p="${o.p + (o.m || 0) * 100}" data-c="${c === '' ? '' : c.toFixed(2)}" data-d="${o.d}"${o.g ? ' data-g="1"' : ''}>
+<div class="dl"><b class="rank">${i + 1}위</b>${o.v === 'w' ? '' : sparkSvg(o.sp)}</div><div class="dm">
+<h3>${o.q ? `<a href="/apt/${esc(o.q)}/#a${a}">${esc(o.a)}</a>` : esc(o.a)}</h3>
+<p class="hint addr">${esc(reg.name)} ${esc(o.u)}${o.dg ? ' ' + esc(o.dg) + '동' : ''}${o.y ? ` · ${o.y}년 준공 · ${yr - o.y + 1}년차` : ''} · <a href="https://map.naver.com/p/search/${q}" target="_blank" rel="noopener nofollow">네이버지도</a> · <a href="https://map.kakao.com/?q=${q}" target="_blank" rel="noopener nofollow">카카오맵</a></p>
+<p class="badges"><span class="b ${o.v}">${sale ? '매매' : o.v === 'j' ? '전세' : '월세'}</span>${o.g ? '<span class="b g">직거래</span>' : ''}${o.r ? '<span class="b fire">🔥 신고가</span>' : ''}${o.tie ? '<span class="b">최고가 동률</span>' : ''}${o.x ? `<span class="b x">해제${o.cd ? ' ' + ymd2(o.cd) : ''}</span>` : ''}${o.rg ? `<span class="b ok">등기 ${ymd2(o.rg)}</span>` : ''}${o.ct ? `<span class="b">${esc(o.ct)}</span>` : ''}${o.s ? ` <span class="hint">계약 후 ${daysBetween(o.d, o.s)}일 만에 공개</span>` : ''}</p>
+<p class="price">${o.v === 'w' ? `${fmtWon(o.p)} / 월 ${comma(o.m)}만` : fmtWon(o.p)}${o.pv && !o.x ? ' ' + chgH(o.p, o.pv[0]) : ''}</p>
+<ul class="chips sm"><li>${esc(o.f)}층${+o.f <= 2 ? ' · 저층' : ''}</li><li>전용 ${o.ar}㎡ (약 ${pyeong(o.ar)}평형)</li><li>계약 ${ymd2(o.d)}</li>${o.term ? `<li>기간 ${esc(o.term)}</li>` : ''}</ul>`;
+  if (o.v !== 'w') {
+    s += '<dl class="kv">';
+    s += `<dt>직전거래</dt><dd>${o.pv ? pfdH(o.pv) : '<span class="hint">없음 (3년 내 첫 거래)</span>'}</dd>`;
+    if (hiI) s += `<dt>3년 최고</dt><dd>${pfdH(hiI)} · 최고가 대비 <b>${pct(o.p, hiI[0])}%</b></dd><dt>3년 최저</dt><dd>${pfdH(loI)}</dd>`;
+    if (sale && o.jr) s += `<dt>전세가율</dt><dd><b>${pct(o.jr[0], o.p)}%</b> · 갭 ${fmtWon(o.p - o.jr[0])} <span class="hint">(전세 중위 ${fmtWon(o.jr[0])}, 최근 6개월 ${o.jr[1]}건)</span></dd>`;
+    if (!sale && o.o) s += `<dt>매매 최근</dt><dd>${pfdH(o.o)} · 전세가율 ${pct(o.p, o.o[0])}%</dd>`;
+    if (!sale && o.pd && o.ct === '갱신') s += `<dt>종전 보증금</dt><dd>${fmtWon(o.pd)} → ${chgH(o.p, o.pd)}</dd>`;
+    s += '</dl>';
+  } else if (o.pd || o.pm) s += `<p class="hint">종전 ${fmtWon(o.pd)} / 월 ${comma(o.pm)}만${o.rr ? ' · 갱신요구권 ' + esc(o.rr) : ''}</p>`;
+  return s + '</div></li>';
+}
+const ldScript = (o) => `<script type="application/ld+json">${JSON.stringify(o).replace(/</g, '\\u003c')}</script>`;
+const crumbs = (list) => ({ '@type': 'BreadcrumbList', itemListElement: list.map(([name, p], i) => ({ '@type': 'ListItem', position: i + 1, name, item: SITE + p })) });
+
+// /r/{시군구}/ 탭: [경로, 탭 이름, 제목 말, 거르기, 기간(일), 해제 기준]
+const RTABS = [
+  ['', '매매', '아파트 실거래가', (o) => o.v === 't', 1],
+  ['high/', '신고가', '아파트 신고가', (o) => o.v === 't' && o.r, 1],
+  ['up/', '상승', '아파트 상승 거래', (o) => o.v === 't' && !o.x && o.pv && o.p > o.pv[0], 1],
+  ['down/', '하락', '아파트 하락 거래', (o) => o.v === 't' && !o.x && o.pv && o.p < o.pv[0], 1],
+  ['rent/', '전세', '아파트 전세 실거래', (o) => o.v === 'j', 1],
+  ['monthly/', '월세', '아파트 월세 실거래', (o) => o.v === 'w', 1],
+  ['cancel/', '해제', '아파트 해제 거래', (o) => o.v === 't' && o.x, 1, true],
+  ['week/', '최근 7일', '아파트 실거래가 최근 7일', (o) => o.v === 't', 7],
+  ['month/', '최근 30일', '아파트 실거래가 최근 30일', (o) => o.v === 't', 30],
+];
+function scopeOf(o, span, useX, today, baseline) { // 기준선(수집 첫날)엔 계약일로 대신한다
+  const s = useX ? o.sx : o.s;
+  if (baseline) return useX ? true : daysBetween(o.d, today) < Math.max(span, 7);
+  return !!s && daysBetween(s, today) < span;
+}
+const sortFor = (path) => path === 'up/' ? (a, b) => (b.p - b.pv[0]) - (a.p - a.pv[0]) : path === 'down/' ? (a, b) => (a.p - a.pv[0]) - (b.p - b.pv[0]) : (a, b) => (b.p + (b.m || 0) * 100) - (a.p + (a.m || 0) * 100) || b.d.localeCompare(a.d);
+function rTabPage(reg, tab, deals, ctx) {
+  const [p, tname, words, pick, span, useX] = tab, { today, baseline, sidoRegs, subsHere, lhHere } = ctx;
+  const list = deals.filter((o) => pick(o) && scopeOf(o, span, useX, today, baseline)).sort(sortFor(p));
+  const nx = list.filter((o) => o.x).length, nrec = list.filter((o) => o.r).length;
+  const mdLabel = `${+today.slice(5, 7)}월 ${+today.slice(8)}일`, sidoShort = reg.sidoShort;
+  const scopeText = baseline ? (span > 7 ? `최근 ${span}일 계약` : '최근 7일 계약') + ' (공개일 수집을 시작한 날이라 계약일 기준)'
+    : span === 1 ? `${today.replace(/-/g, '.')} 새로 공개된 거래(05시 수집)` : `최근 ${span}일 동안 새로 공개된 거래`;
+  const title = span === 1 ? `${reg.sido} ${reg.name} ${words} ${mdLabel} ${baseline ? '최근' : '신규'} ${list.length}건` : `${reg.sido} ${reg.name} ${words}`;
+  const top = list.find((o) => o.v === 't' && !o.x);
+  const base = `/r/${reg.code}/`, url = base + p;
+  const desc = `${reg.name} ${scopeText} ${tname} ${list.length}건${nrec ? `, 신고가 ${nrec}건` : ''}.${top ? ` 최고가 ${top.a} ${fmtWon(top.p)}.` : ''} 직전 거래 대비 변동·3년 최고/최저·전세가율 포함.`;
+  const yr = +today.slice(0, 4);
+  const body = `<p class="hint"><a href="/">홈</a> › <a href="/today/">오늘 실거래가</a> › <a href="/r/${reg.code.slice(0, 2)}/">${esc(reg.sido)}</a> › ${esc(reg.name)}</p>
+<h1>${esc(reg.sido)} ${esc(reg.name)} ${words}${span === 1 ? ' ' + mdLabel : ''}</h1>
+<nav class="menu" aria-label="보기">${RTABS.map((t) => `<a href="${base}${t[0]}"${t === tab ? ' aria-current="page"' : ''}>${t[1]}</a>`).join('')}</nav>
+<p class="sum"><b>${esc(scopeText)}</b> · ${esc(reg.sido)} ${esc(reg.name)} ${tname} (총 ${list.length}건${nx && !useX ? `, 해제 ${nx}건 포함` : ''})</p>
+${list.length ? `<div class="card filters" data-js hidden>
+<label>읍면동<select id="um"><option value="">전체 읍면동</option>${[...new Set(list.map((o) => o.u))].sort().map((u) => `<option>${esc(u)}</option>`).join('')}</select></label>
+<label>면적(전용)<select id="bd"><option value="">전체 면적</option><option value="0-57.99">58㎡ 미만</option><option value="58-60i">59㎡대 (58~60㎡)</option><option value="60-85">60~85㎡</option><option value="83-85i">84㎡대 (83~85㎡)</option><option value="85-135">85~135㎡</option><option value="135-99999">135㎡ 초과</option></select></label>
+<label>정렬<select id="so"><option value="">기본(${p === 'up/' || p === 'down/' ? '변동액순' : '금액순'})</option><option value="p">금액순</option><option value="c">변동률순</option><option value="d">계약일순</option></select></label>
+<label class="chk"><input type="checkbox" id="nd"> 직거래 빼기</label><button type="button" id="share">🔗 공유·링크 복사</button></div>
+<p class="badges hint"><span class="b t">매매</span><span class="b g">직거래</span><span class="b fire">🔥 신고가</span><span class="b x">해제</span><span class="b ok">등기</span> · 금액 만원 · 면적 전용 · 공개일 = 부동산 알리미가 처음 수집한 날(05시) · 해제 거래는 변동·최고가 계산에서 빼요 · 전세가율 = 최근 6개월 전세(갱신 제외) 중위값 ÷ 매매가</p>
+<ol class="deals">${list.map((o, i) => cardHtml(o, i, reg, yr)).join('\n')}</ol>
+<button type="button" id="more" class="more" hidden>더 보기</button>`
+    : `<p class="card">${span === 1 ? '오늘 새로 공개된 거래가 없습니다' : '해당 기간에 공개된 거래가 없습니다'} · <a href="${base}week/">최근 7일 보기</a> · <a href="/apt/${reg.code}/">최근 두 달 전체 거래표</a></p>`}
+${subsHere.length ? `<h2>📝 이 지역 청약</h2><ul class="rec">${subsHere.map((x) => `<li><a href="/subscription/${esc(x.HOUSE_MANAGE_NO)}/">${esc(x.HOUSE_NM)}</a> <span class="hint">접수 ${md(x.RCEPT_BGNDE)}~${md(x.RCEPT_ENDDE)}</span></li>`).join('')}</ul>` : ''}
+${lhHere.length ? `<h2>🏠 ${esc(reg.sido)} LH 공고</h2><ul class="rec">${lhHere.map((x) => `<li>${link(x.DTL_URL, esc(x.PAN_NM))} <span class="hint">마감 ${md(x.CLSG_DT)}</span></li>`).join('')}</ul>` : ''}
+<h2>${esc(reg.sido)} 다른 시·군·구</h2><ul class="chips">${sidoRegs.map((r) => `<li><a href="/r/${r.code}/${p}"${r.code === reg.code ? ' aria-current="page"' : ''}>${esc(r.name)}</a></li>`).join('')}</ul>
+<p class="hint">신고가 = 같은 단지·같은 전용면적(㎡ 반올림)에서 계약일이 더 이른 거래(최대 3년)의 최고가보다 비싼 거래(같은 값은 '최고가 동률'). 3년 최고·최저는 이번 거래를 포함해요. “계약 후 N일 만에 공개”는 처음 수집한 날로 고정돼요.</p>
+<script src="/today.js" defer></script>`;
+  const ld = [crumbs([['홈', '/'], ['오늘 실거래가', '/today/'], [reg.sido, `/r/${reg.code.slice(0, 2)}/`], [reg.name, base]]),
+    { '@type': 'ItemList', name: title, numberOfItems: list.length, itemListElement: list.slice(0, 30).map((o, i) => ({ '@type': 'ListItem', position: i + 1, name: `${o.a} ${o.ar}㎡ ${fmtWon(o.p)}`, ...(o.q ? { url: `${SITE}/apt/${o.q}/` } : {}) })) }];
+  return { n: list.length, nrec, html: page({ title: `${title} | 부동산 알리미`, p: url, desc, body, noindex: !list.length, ld: { '@context': 'https://schema.org', '@graph': ld } }) };
+}
+
+// /apt/{aptSeq}/ 단지 상세: 면적별 요약·차트·이력 (저장소 36개월 + 최근 두 달 원자료)
+function aptPage(seq, reg, keysOf, h, rowsT, rowsR, neighbors, subsHere, today) {
+  const meta = [...rowsT, ...rowsR].sort((a, b) => dealDate(b).localeCompare(dealDate(a)))[0];
+  const nm = meta.aptNm, umd = meta.umdNm, by = +meta.buildYear || 0, road = (meta.roadNm || meta.roadnm || '').trim(), yr = +today.slice(0, 4);
+  const areas = [...new Set(keysOf.map((k) => +k.split('|')[1]))].sort((a, b) => a - b);
+  const realAr = {}; for (const r of [...rowsT, ...rowsR]) realAr[Math.round(+r.excluUseAr)] ||= +r.excluUseAr; // 표시는 실제 전용면적
+  const arTxt = (a) => realAr[a] || a;
+  const dn = +today.replace(/-/g, '');
+  const winT = {}; for (const r of rowsT) (winT[`${d8n(r)}|${toMan(r.dealAmount)}|${parseInt(r.floor, 10) || 0}`] ||= r);
+  let latestAll = null, jrAll = null;
+  const secs = areas.map((a) => {
+    const key = `${seq}|${a}`, T = (h.t.k[key] || []).slice().sort((x, y) => y[0] - x[0]), J = (h.r.k[key] || []).slice().sort((x, y) => y[0] - x[0]);
+    const cx = rowsT.filter((r) => r.cdealType === 'O' && recKey(r) === key);
+    const last = T[0], hi = T.reduce((m, e) => (!m || e[1] > m[1] ? e : m), null), lo = T.reduce((m, e) => (!m || e[1] < m[1] ? e : m), null);
+    const jr = jeonseMedian(h.r.k[key], dn), n12 = T.filter((e) => e[0] > dn - 10000).length;
+    if (last && (!latestAll || last[0] > latestAll[0][0])) latestAll = [last, arTxt(a)];
+    if (jr && last && !jrAll) jrAll = pct(jr[0], last[1]);
+    const kv = [
+      last && ['최근 매매', `<b>${fmtWon(last[1])}</b> (${last[2]}층) <span class="hint">${ymd2(d8s(last[0]))}</span>`],
+      hi && ['3년 최고', `${fmtWon(hi[1])} (${hi[2]}층) <span class="hint">${ymd2(d8s(hi[0]))}</span>${last ? ` · 최고가 대비 <b>${pct(last[1], hi[1])}%</b>` : ''}`],
+      lo && ['3년 최저', `${fmtWon(lo[1])} (${lo[2]}층) <span class="hint">${ymd2(d8s(lo[0]))}</span>`],
+      jr && ['전세 중위', `${fmtWon(jr[0])} <span class="hint">(최근 6개월 갱신 제외 ${jr[1]}건)</span>${last ? ` · 전세가율 <b>${pct(jr[0], last[1])}%</b> · 갭 ${fmtWon(last[1] - jr[0])}` : ''}`],
+      ['최근 12개월 매매', `${n12}건`],
+    ].filter(Boolean);
+    const tRows = [...T.slice(0, 40).map((e) => { const w = winT[`${e[0]}|${e[1]}|${e[2]}`]; return [e[0], `<tr>${td(ymd2(d8s(e[0])))}${td(fmtWon(e[1]), 1)}${td(e[2], 1)}${td(w ? [w.aptDong?.trim() ? esc(w.aptDong.trim()) + '동' : '', w.dealingGbn === '직거래' ? '직거래' : '', ymdAny(w.rgstDate) ? '등기 ' + ymd2(ymdAny(w.rgstDate)) : ''].filter(Boolean).join(' · ') : '')}</tr>`]; }),
+      ...cx.map((r) => [d8n(r), `<tr class="cx">${td(`<s>${ymd2(dealDate(r))}</s>`)}${td(`<s>${fmtWon(toMan(r.dealAmount))}</s>`, 1)}${td(esc(r.floor), 1)}${td(`해제 ${ymd2(ymdAny(r.cdealDay))}`)}</tr>`])].sort((x, y) => y[0] - x[0]).map((x) => x[1]);
+    const rr = rowsR.filter((r) => recKey(r) === key).sort((x, y) => dealDate(y).localeCompare(dealDate(x)));
+    return `<section id="a${a}"><h2>전용 ${arTxt(a)}㎡ <span class="hint">(약 ${pyeong(a)}평형)</span></h2>
+<dl class="kv card">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl>
+${chartSvg(T.slice(0, 200), J.filter((e) => e[0] >= T.concat(J).reduce((m, e2) => Math.min(m, e2[0]), 99999999)).slice(0, 200))}
+<h3>매매 이력 (최근 3년 ${T.length}건${T.length > 40 ? ', 최근 40건 표시' : ''})</h3>${table(['계약일', '거래가 ', '층 ', '비고'], tRows)}
+${J.length ? `<h3>전세 이력 (최근 3년 ${J.length}건${J.length > 20 ? ', 최근 20건 표시' : ''})</h3>${table(['계약일', '보증금 ', '층 ', '구분'], J.slice(0, 20).map((e) => `<tr>${td(ymd2(d8s(e[0])))}${td(fmtWon(e[1]), 1)}${td(e[2], 1)}${td(e[3] === 1 ? '갱신' : '')}</tr>`))}` : ''}
+${rr.length ? `<h3>최근 두 달 전월세 (${rr.length}건)</h3>${table(['계약일', '보증금 ', '월세 ', '층 ', '구분', '종전→이번', '기간'], rr.slice(0, 30).map((r) => { const pd = toMan(r.preDeposit), dp = toMan(r.deposit); return `<tr>${td(ymd2(dealDate(r)))}${td(fmtWon(dp), 1)}${td(toMan(r.monthlyRent) ? comma(toMan(r.monthlyRent)) + '만' : '-', 1)}${td(esc(r.floor), 1)}${td(esc([r.contractType, (r.useRRRight || '').trim() === '사용' ? '갱신요구권' : ''].filter((v) => v && v.trim()).join(' · ')))}${td(pd ? `${man(pd)}→${man(dp)} (${chg(dp, pd)[1]}%)` : '')}${td(esc(r.contractTerm || ''))}</tr>`; }))}` : ''}
+</section>`;
+  });
+  const base = `/apt/${seq}/`, lastTxt = latestAll ? `${fmtWon(latestAll[0][1])} (${latestAll[1]}㎡, ${ymd2(d8s(latestAll[0][0])).slice(0, 5)})` : '';
+  const nT = keysOf.reduce((s, k) => s + (h.t.k[k] || []).length, 0), nJ = keysOf.reduce((s, k) => s + (h.r.k[k] || []).length, 0);
+  const body = `<p class="hint"><a href="/">홈</a> › <a href="/r/${reg.code.slice(0, 2)}/">${esc(reg.sido)}</a> › <a href="/r/${reg.code}/">${esc(reg.name)}</a> › ${esc(umd)}</p>
+<h1>${esc(nm)}</h1>
+<p class="lead">${esc(reg.sido)} ${esc(reg.name)} ${esc(umd)} ${esc(meta.jibun || '')}${road ? ' · ' + esc(road) : ''}${by ? ` · ${by}년 준공 · ${yr - by + 1}년차` : ''}</p>
+<ul class="chips">${areas.map((a) => `<li><a href="#a${a}">전용 ${arTxt(a)}㎡</a></li>`).join('')}<li><a href="https://map.naver.com/p/search/${encodeURIComponent(`${reg.name} ${umd} ${nm}`)}" target="_blank" rel="noopener nofollow">네이버지도</a></li></ul>
+${secs.join('\n')}
+${neighbors.length ? `<h2>${esc(umd)} 다른 단지</h2><ul class="chips">${neighbors.map(([q, n]) => `<li><a href="/apt/${esc(q)}/">${esc(n)}</a></li>`).join('')}</ul>` : ''}
+${subsHere.length ? `<h2>📝 ${esc(reg.name)} 청약</h2><ul class="rec">${subsHere.map((x) => `<li><a href="/subscription/${esc(x.HOUSE_MANAGE_NO)}/">${esc(x.HOUSE_NM)}</a> <span class="hint">접수 ${md(x.RCEPT_BGNDE)}~${md(x.RCEPT_ENDDE)}</span></li>`).join('')}</ul>` : ''}
+<p class="hint">금액은 신고가 기준 계약 금액이에요. 면적은 전용면적을 ㎡ 단위로 반올림해 묶었어요. <a href="/r/${reg.code}/">${esc(reg.name)} 오늘 실거래가 →</a></p>`;
+  const ld = { '@context': 'https://schema.org', '@graph': [
+    { '@type': 'ApartmentComplex', name: nm, url: SITE + base, address: { '@type': 'PostalAddress', addressRegion: reg.sido, addressLocality: `${reg.name} ${umd}`, ...(road ? { streetAddress: road } : {}), addressCountry: 'KR' }, ...(by ? { additionalProperty: { '@type': 'PropertyValue', name: 'yearBuilt', value: by } } : {}) },
+    crumbs([['홈', '/'], [reg.sido, `/r/${reg.code.slice(0, 2)}/`], [reg.name, `/r/${reg.code}/`], [nm, base]])] };
+  return page({ title: `${nm} 실거래가 ${lastTxt}${jrAll ? ` · 전세가율 ${jrAll}%` : ''} | ${reg.name} ${umd}`, p: base, body, ld,
+    desc: `${nm}(${by ? by + '년, ' : ''}${reg.name} ${umd}) 최근 3년 매매 ${nT}건·전세 ${nJ}건 이력, 면적별 3년 최고·최저, 최근 전세 중위값과 전세가율.` });
 }
 
 async function pool(items, n, fn) {
@@ -238,7 +390,7 @@ async function pool(items, n, fn) {
 
 // ---------- 렌더 ----------
 let STAMP = '';
-function page({ title, desc, p, body, noindex }) {
+function page({ title, desc, p, body, noindex, ld }) {
   return `<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title>
@@ -247,7 +399,7 @@ function page({ title, desc, p, body, noindex }) {
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(desc)}">
 <meta property="og:url" content="${SITE}${p}">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css">${ld ? '\n' + ldScript(ld) : ''}
 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5424435978828190" crossorigin="anonymous"></script>
 <meta name="naver-site-verification" content="fa471c31c15624eed79795f1054ec33c0ea276b2" />
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-19F8RF6971"></script><script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}gtag("js",new Date());gtag("config","G-19F8RF6971");</script>
@@ -289,7 +441,7 @@ function recBox(d) { // 시군구 페이지의 '이 지역 신고가' 상자
       ? '<ul class="rec">' + list.map((x) => `<li>${md(x.d)} ${esc(x.r.aptNm)} ${Math.round(+x.r.excluUseAr)}㎡ ${esc(x.r.floor)}층 <b>${fmtWon(x.p)}</b> <span class="up">▲${fmtWon(x.p - x.prev)}</span> <span class="hint">이전 ${fmtWon(x.prev)}(${esc(x.prevDate)})</span></li>`).join('') + '</ul>'
       : '<p class="hint" style="margin:0">해당 거래가 없어요.</p>');
   };
-  return `<div class="card"><b>🔥 이 지역 신고가</b> <a class="hint" href="/today/?c=${d.code}&amp;v=trec">오늘 실거래가에서 자세히 →</a>${part('t', '매매')}${part('r', '전세')}<p class="hint" style="margin:8px 0 0">같은 단지·같은 전용면적(㎡ 반올림)에서 계약일이 더 이른 거래의 최고가를 넘은 거래예요.</p></div>`;
+  return `<div class="card"><b>🔥 이 지역 신고가</b> <a class="hint" href="/r/${d.code}/high/">오늘 실거래가에서 자세히 →</a>${part('t', '매매')}${part('r', '전세')}<p class="hint" style="margin:8px 0 0">같은 단지·같은 전용면적(㎡ 반올림)에서 계약일이 더 이른 거래의 최고가를 넘은 거래예요.</p></div>`;
 }
 
 function regionPage(reg, label, months, trade, rent, failed, d) {
@@ -303,6 +455,7 @@ function regionPage(reg, label, months, trade, rent, failed, d) {
 <h1>${esc(label)} 아파트 실거래가 ${ymLabel(cur)}</h1>
 <p class="lead">${esc(reg.sido)} ${esc(reg.name)}에서 최근 두 달(${months.map(ymLabel).join('·')}) 신고된 아파트 매매 <b>${nT}건</b>, 전월세 <b>${nR}건</b>이에요. 매일 새벽 국토교통부 자료로 갱신돼요.</p>`;
   if (failed) body += '<p class="warn">이번 갱신에서 일부 자료를 불러오지 못했어요. 내일 다시 갱신돼요.</p>';
+  body += `<p><a class="cta" href="/r/${reg.code}/">📋 ${esc(label)} 오늘 공개된 실거래 · 신고가·상승·하락 보기 →</a></p>`;
   if (d?.rec) body += recBox(d);
 
   const tm = months.map((ym) => [ym, liveT(ym)]);
@@ -397,7 +550,7 @@ function h(s){return String(s).replace(/[&<>"]/g,function(c){return{"&":"&amp;",
 function d(s){return +s.slice(5,7)+"."+ +s.slice(8)}
 function draw(){var sd=$("rec-sido").value,L=D[k].filter(function(x){return!sd||x[0]===sd});
 $("rec-ph").textContent=k==="t"?"거래가":"보증금";$("rec-note").textContent=D.note[k];
-$("rec-body").innerHTML=L.slice(0,n).map(function(x){return"<tr><td>"+d(x[9])+"</td><td><a href=\\"/apt/"+x[2]+"/\\">"+h(x[1])+"</a></td><td>"+h(x[3])+"</td><td class=n>"+x[4]+"</td><td class=n>"+h(x[5])+"</td><td class=n><b>"+w(x[6])+"</b></td><td class=n>"+w(x[7])+"<br><span class=hint>"+h(x[8])+"</span></td><td class=n><span class=up>▲"+w(x[6]-x[7])+"</span><br><span class=hint>+"+((x[6]-x[7])/x[7]*100).toFixed(1)+"%</span></td></tr>"}).join("");
+$("rec-body").innerHTML=L.slice(0,n).map(function(x){return"<tr><td>"+d(x[9])+"</td><td><a href=\\"/r/"+x[2]+"/high/\\">"+h(x[1])+"</a></td><td>"+h(x[3])+"</td><td class=n>"+x[4]+"</td><td class=n>"+h(x[5])+"</td><td class=n><b>"+w(x[6])+"</b></td><td class=n>"+w(x[7])+"<br><span class=hint>"+h(x[8])+"</span></td><td class=n><span class=up>▲"+w(x[6]-x[7])+"</span><br><span class=hint>+"+((x[6]-x[7])/x[7]*100).toFixed(1)+"%</span></td></tr>"}).join("");
 $("rec-empty").hidden=L.length>0;$("rec-more").hidden=L.length<=n}
 [].forEach.call(document.querySelectorAll(".tabs [data-k]"),function(b){b.onclick=function(){k=b.dataset.k;n=100;[].forEach.call(document.querySelectorAll(".tabs [data-k]"),function(x){x.setAttribute("aria-selected",x===b)});draw()}});
 $("rec-sido").onchange=function(){n=100;draw()};$("rec-more").onclick=function(){n+=100;draw()};draw()})();</script>`;
@@ -435,39 +588,6 @@ async function main() {
   failures.forEach((f) => console.warn('⚠️', f));
   if (failures.length > Math.max(10, tasks.length * 0.1)) throw fatal(`실거래 호출 실패가 너무 많아요 (${failures.length}/${tasks.length})`);
 
-  // 1-1) 신고가·지역 JSON: 최근 두 달을 저장소에 덮어쓰고, 각 거래를 그보다 이른 거래와 비교
-  const since14 = new Date(kst.getTime() - 14 * 86400e3).toISOString().slice(0, 10);
-  const recs = { t: [], r: [] }, events = [];
-  for (const r of regions) {
-    const h = FIX ? emptyHist() : loadHist(r.code), d = data[r.code];
-    d.rec = {}; d.cov = {};
-    for (const kind of ['t', 'r']) {
-      const H = h[kind], src = d[kind === 't' ? 'trade' : 'rent'];
-      pruneHist(H, months36);
-      for (const ym of months) if (src[ym]) putMonth(H, ym, kind, src[ym]);
-      const found = findRecords(kind, months.flatMap((ym) => src[ym] || []), H).sort((a, b) => b.d.localeCompare(a.d));
-      d.rec[kind] = found; d.cov[kind] = H.m.length;
-      for (const x of found) {
-        events.push({ kind, code: r.code, key: x.key, d: x.d, p: x.p, prev: x.prev, prevDate: x.prevDate, floor: x.r.floor });
-        if (d.cov[kind] >= RELIABLE && x.d >= since14) recs[kind].push([r.code.slice(0, 2), `${SIDO_SHORT[r.sido] || r.sido} ${r.name}`, r.code, x.r.aptNm, +x.r.excluUseAr, x.r.floor, x.p, x.prev, x.prevDate, x.d]);
-      }
-    }
-    const j = dealRows(d, h, months, today, h.seen);
-    h.seen = j.seen;
-    d.json = JSON.stringify({ code: r.code, sido: r.sido, name: r.name, date: today, cov: d.cov, deals: j.deals, K: j.K });
-    if (!FIX) saveHist(r.code, h);
-  }
-  const collecting = { t: regions.filter((r) => data[r.code].cov.t < RELIABLE), r: regions.filter((r) => data[r.code].cov.r < RELIABLE) };
-  for (const k of ['t', 'r']) collecting[k].minCov = Math.min(...collecting[k].map((r) => data[r.code].cov[k]));
-  if (!FIX) { // 감지 기록: 처음 본 날(seen)과 함께 180일 보관
-    const ef = path.join(HIST, 'events.json');
-    let old = []; try { old = JSON.parse(fs.readFileSync(ef, 'utf8')); } catch {}
-    const id = (e) => [e.kind, e.code, e.key, e.d, e.p, e.floor].join('|'), seen = new Set(old.map(id));
-    const cut = new Date(kst.getTime() - 180 * 86400e3).toISOString().slice(0, 10);
-    fs.writeFileSync(ef, JSON.stringify([...old.filter((e) => e.seen >= cut), ...events.filter((e) => !seen.has(id(e))).map((e) => ({ ...e, seen: today }))]));
-  }
-  for (const k of ['t', 'r']) recs[k].sort((a, b) => b[9].localeCompare(a[9]) || b[6] - a[6]);
-
   // 2) 청약홈 APT 분양정보 + 주택형
   const subs = (await odcloud('getAPTLttotPblancDetail', { 'cond[RCRIT_PBLANC_DE::GTE]': since }, 'applyhome_detail.json'))
     .filter((x) => x.HOUSE_MANAGE_NO);
@@ -486,21 +606,78 @@ async function main() {
   fs.rmSync(OUT, { recursive: true, force: true });
   const indexable = [];
   let pages = 0;
-  const write = (p, html, noindex) => {
+  let pagesDb = {}; try { if (!FIX) pagesDb = JSON.parse(fs.readFileSync(path.join(HIST, '_pages.json'), 'utf8')); } catch {}
+  const seenPages = {};
+  const write = (p, html, noindex) => { // lastmod = 내용(기준 시각 제외)이 마지막으로 바뀐 날
     const f = path.join(OUT, p.endsWith('/') ? p + 'index.html' : p);
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.writeFileSync(f, html);
     pages++;
+    const hash = require('crypto').createHash('md5').update(html.split(STAMP).join('')).digest('base64').slice(0, 12);
+    seenPages[p] = pagesDb[p] && pagesDb[p][0] === hash ? pagesDb[p] : [hash, today];
     if (!noindex) indexable.push(p);
   };
   fs.mkdirSync(OUT, { recursive: true });
   for (const f of ['style.css', 'CNAME', 'today.js']) fs.copyFileSync(path.join(__dirname, f), path.join(OUT, f));
 
-  fs.mkdirSync(path.join(OUT, 'data'));
+  // 1-1) 저장소 갱신 · 신고가 · 단지 페이지(/apt/{aptSeq}/) — 최근 두 달을 저장소에 덮어쓰고, 각 거래를 그보다 이른 거래와 비교
+  const since14 = new Date(kst.getTime() - 14 * 86400e3).toISOString().slice(0, 10);
+  const recs = { t: [], r: [] }, events = [];
+  const openSubs = subs.filter((x) => normDate(x.PRZWNER_PRESNATN_DE || x.RCEPT_ENDDE) >= today);
+  const lhOpenAll = lh.filter((x) => normDate(x.CLSG_DT) >= today);
+  for (const r of regions) {
+    r.sidoShort = SIDO_SHORT[r.sido] || r.sido;
+    r.subsHere = openSubs.filter((x) => (x.HSSPLY_ADRES || '').includes(r.sido.slice(0, 2)) && (x.HSSPLY_ADRES || '').includes(r.name)).slice(0, 5);
+    r.lhHere = lhOpenAll.filter((x) => (x.CNP_CD_NM || '').slice(0, 2) === r.sido.slice(0, 2)).slice(0, 5);
+  }
+  let nApt = 0;
+  for (const r of regions) {
+    const h = FIX ? emptyHist() : loadHist(r.code), d = data[r.code];
+    d.rec = {}; d.cov = {};
+    for (const kind of ['t', 'r']) {
+      const H = h[kind], src = d[kind === 't' ? 'trade' : 'rent'];
+      pruneHist(H, months36);
+      for (const ym of months) if (src[ym]) putMonth(H, ym, kind, src[ym]);
+      const found = findRecords(kind, months.flatMap((ym) => src[ym] || []), H).sort((a, b) => b.d.localeCompare(a.d));
+      d.rec[kind] = found; d.cov[kind] = H.m.length;
+      for (const x of found) {
+        events.push({ kind, code: r.code, key: x.key, d: x.d, p: x.p, prev: x.prev, prevDate: x.prevDate, floor: x.r.floor });
+        if (d.cov[kind] >= RELIABLE && x.d >= since14) recs[kind].push([r.code.slice(0, 2), `${r.sidoShort} ${r.name}`, r.code, x.r.aptNm, +x.r.excluUseAr, x.r.floor, x.p, x.prev, x.prevDate, x.d]);
+      }
+    }
+    const j = dealRows(d, h, months, today, h.seen, h.seenX);
+    h.seen = j.seen; h.seenX = j.seenX; d.deals = j.deals;
+    // 단지 페이지: 최근 두 달 거래가 있는 aptSeq
+    const seqKeys = {};
+    for (const kind of ['t', 'r']) for (const k of Object.keys(h[kind].k)) { const q = k.split('|')[0]; if (/^\d{5}-\d+$/.test(q)) (seqKeys[q] ||= new Set()).add(k); }
+    const rowsBy = {};
+    for (const ym of months) for (const [kind, rows] of [['t', d.trade[ym]], ['r', d.rent[ym]]]) for (const row of rows || []) {
+      const q = (row.aptSeq || '').trim(); if (seqKeys[q]) ((rowsBy[q] ||= { t: [], r: [] })[kind]).push(row);
+    }
+    const byUmd = {};
+    for (const [q, rw] of Object.entries(rowsBy)) { const m = rw.t[0] || rw.r[0]; (byUmd[m.umdNm] ||= []).push([q, m.aptNm, rw.t.length + rw.r.length]); }
+    for (const [q, rw] of Object.entries(rowsBy)) {
+      const umd = (rw.t[0] || rw.r[0]).umdNm, nb = byUmd[umd].filter((x) => x[0] !== q).sort((a, b) => b[2] - a[2]).slice(0, 10);
+      write(`/apt/${q}/`, aptPage(q, r, [...seqKeys[q]], h, rw.t, rw.r, nb, r.subsHere, today));
+      nApt++;
+    }
+    if (!FIX) saveHist(r.code, h);
+  }
+  const collecting = { t: regions.filter((r) => data[r.code].cov.t < RELIABLE), r: regions.filter((r) => data[r.code].cov.r < RELIABLE) };
+  for (const k of ['t', 'r']) collecting[k].minCov = Math.min(...collecting[k].map((r) => data[r.code].cov[k]));
+  if (!FIX) { // 감지 기록: 처음 본 날(seen)과 함께 180일 보관
+    const ef = path.join(HIST, 'events.json');
+    let old = []; try { old = JSON.parse(fs.readFileSync(ef, 'utf8')); } catch {}
+    const id = (e) => [e.kind, e.code, e.key, e.d, e.p, e.floor].join('|'), seen = new Set(old.map(id));
+    const cut = new Date(kst.getTime() - 180 * 86400e3).toISOString().slice(0, 10);
+    fs.writeFileSync(ef, JSON.stringify([...old.filter((e) => e.seen >= cut), ...events.filter((e) => !seen.has(id(e))).map((e) => ({ ...e, seen: today }))]));
+  }
+  for (const k of ['t', 'r']) recs[k].sort((a, b) => b[9].localeCompare(a[9]) || b[6] - a[6]);
+
+
   const sidos = [];
   for (const r of regions) {
     const d = data[r.code];
-    fs.writeFileSync(path.join(OUT, 'data', r.code + '.json'), d.json);
     const pg = regionPage(r, label(r), months, d.trade, d.rent, d.failed, d);
     write(`/apt/${r.code}/`, pg.html, pg.noindex);
     r.nT = pg.nT; r.nR = pg.nR;
@@ -522,7 +699,80 @@ ${table(['시·군·구', `${ymLabel(months[0]).slice(6)} 매매 `, '2개월 매
     s.nT = nT;
   }
 
-  write('/today/', todayPage(regions));
+  // 오늘 실거래가 /r/{시군구}/{탭}/, 시도 /r/{시도}/, 모음 /today/
+  const baseline = !regions.some((r) => data[r.code].deals.some((o) => o.s || o.sx));
+  const bySido = {};
+  for (const r of regions) (bySido[r.code.slice(0, 2)] ||= []).push(r);
+  for (const r of regions) {
+    r.tabs = {};
+    for (const t of RTABS) {
+      const pg = rTabPage(r, t, data[r.code].deals, { today, baseline, sidoRegs: bySido[r.code.slice(0, 2)], subsHere: r.subsHere, lhHere: r.lhHere });
+      write(`/r/${r.code}/${t[0]}`, pg.html, !pg.n);
+      r.tabs[t[0]] = pg.n;
+    }
+  }
+  const mdLabel = `${+today.slice(5, 7)}월 ${+today.slice(8)}일`, scopeWord = baseline ? '최근 7일 계약' : `${mdLabel} 공개`;
+  const RCOLS = [['', '매매'], ['high/', '신고가'], ['up/', '상승'], ['down/', '하락'], ['rent/', '전세'], ['monthly/', '월세'], ['cancel/', '해제']];
+  const sumTabs = (rs, t) => rs.reduce((a, r) => a + r.tabs[t], 0);
+  for (const [sc, rs] of Object.entries(bySido)) {
+    const sido = rs[0].sido;
+    write(`/r/${sc}/`, page({ title: `${sido} 아파트 실거래가 ${mdLabel} | 시군구별 ${baseline ? '최근' : '오늘 공개'} ${sumTabs(rs, '')}건 | 부동산 알리미`, p: `/r/${sc}/`,
+      desc: `${sido} 시군구별 ${scopeWord} 아파트 매매 ${sumTabs(rs, '')}건, 신고가 ${sumTabs(rs, 'high/')}건, 전세 ${sumTabs(rs, 'rent/')}건. 매일 05시 갱신.`,
+      ld: { '@context': 'https://schema.org', ...crumbs([['홈', '/'], ['오늘 실거래가', '/today/'], [sido, `/r/${sc}/`]]) },
+      body: `<p class="hint"><a href="/">홈</a> › <a href="/today/">오늘 실거래가</a> › ${esc(sido)}</p>
+<h1>${esc(sido)} 아파트 실거래가 ${mdLabel}</h1>
+<p class="lead">${esc(sido)} 시·군·구별 ${esc(scopeWord)} 거래 건수예요. 숫자를 누르면 그 목록으로 가요.</p>
+${table(['시·군·구', ...RCOLS.map(([, n]) => n + ' ')], rs.map((r) => '<tr>' + td(`<a href="/r/${r.code}/">${esc(r.name)}</a>`) + RCOLS.map(([t]) => td(r.tabs[t] ? `<a href="/r/${r.code}/${t}">${r.tabs[t]}</a>` : '0', 1)).join('') + '</tr>'))}` }));
+  }
+  write('/today/', page({ title: `오늘 아파트 실거래가 ${mdLabel} | 전국 시군구 신고가·상승·하락 | 부동산 알리미`, p: '/today/',
+    desc: `전국 ${scopeWord} 아파트 매매 ${sumTabs(regions, '')}건, 신고가 ${sumTabs(regions, 'high/')}건. 시군구별 직전 거래 대비 변동, 3년 최고·최저, 전세가율.`,
+    body: `<h1>오늘 실거래가 <span class="hint">${mdLabel}</span></h1>
+<p class="lead">${baseline ? '공개일 수집을 오늘 시작해서, 우선 최근 7일 계약을 보여줘요. 내일부터는 새로 공개된 거래만 모아요.' : '국토교통부 자료에 새로 공개된 아파트 거래를 매일 05시에 모아요.'} 시·군·구를 누르세요.</p>
+${table(['시·도', ...RCOLS.map(([, n]) => n + ' ')], Object.entries(bySido).map(([sc, rs]) => '<tr>' + td(`<a href="/r/${sc}/">${esc(rs[0].sido)}</a>`) + RCOLS.map(([t]) => td(sumTabs(rs, t), 1)).join('') + '</tr>'))}
+${Object.entries(bySido).map(([sc, rs]) => `<h2><a href="/r/${sc}/">${esc(rs[0].sido)}</a></h2><ul class="chips">${rs.map((r) => `<li><a href="/r/${r.code}/">${esc(r.name)} <span class="c">${r.tabs['']}건</span></a></li>`).join('')}</ul>`).join('\n')}` }));
+
+  // 오늘의 실거래 리포트 /report/YYYY-MM-DD/ — 본문은 history/reports/ 에 남겨 매일 다시 싣는다
+  {
+    const RD = path.join(HIST, 'reports'), dayDeals = [];
+    for (const r of regions) for (const o of data[r.code].deals) if (scopeOf(o, 1, false, today, baseline)) dayDeals.push([o, r]);
+    const T = dayDeals.filter(([o]) => o.v === 't' && !o.x), J = dayDeals.filter(([o]) => o.v === 'j');
+    const nm = ([o, r]) => `${o.q ? `<a href="/apt/${esc(o.q)}/#a${Math.round(o.ar)}">${esc(o.a)}</a>` : esc(o.a)} <span class="hint">${o.ar}㎡ ${esc(o.f)}층</span>`;
+    const rg = (r) => `<a href="/r/${r.code}/">${esc(r.sidoShort)} ${esc(r.name)}</a>`;
+    const top = (list, sort, n = 10) => list.slice().sort(sort).slice(0, n);
+    const cnt = (sc) => { const f = (pick) => dayDeals.filter(([o, r]) => (!sc || r.code.startsWith(sc)) && pick(o)).length;
+      return [f((o) => o.v === 't' && !o.x), f((o) => o.v === 't' && o.r), f((o) => o.v === 'j'), f((o) => o.v === 'w'), f((o) => o.x)]; };
+    const rowsC = [['전국', ''], ...Object.entries(bySido).map(([sc, rs]) => [rs[0].sidoShort, sc])].map(([n, sc]) => ['<tr>' + td(sc ? `<a href="/r/${sc}/">${esc(n)}</a>` : '<b>전국</b>') + cnt(sc).map((v) => td(comma(v), 1)).join('') + '</tr>', sc ? cnt(sc)[0] : Infinity]);
+    const volume = regions.map((r) => [r, dayDeals.filter(([o, x]) => x === r && o.v === 't' && !o.x).length]).filter((x) => x[1]).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const up = T.filter(([o]) => o.pv && o.p > o.pv[0]), down = T.filter(([o]) => o.pv && o.p < o.pv[0]);
+    const byPc = (dir) => (a, b) => dir * ((b[0].p - b[0].pv[0]) / b[0].pv[0] - (a[0].p - a[0].pv[0]) / a[0].pv[0]);
+    const jr = T.filter(([o]) => o.jr && o.jr[1] >= 2);
+    const recRow = ([o, r]) => '<tr>' + td(rg(r)) + td(nm([o, r])) + td(`<b>${fmtWon(o.p)}</b>`, 1) + td(`${fmtWon(o.hi[0])}<br><span class="hint">${ymd2(o.hi[2])}</span>`, 1) + td(chgH(o.p, o.hi[0]), 1) + '</tr>';
+    const chgRow = ([o, r]) => '<tr>' + td(rg(r)) + td(nm([o, r])) + td(`<b>${fmtWon(o.p)}</b>`, 1) + td(`${fmtWon(o.pv[0])}<br><span class="hint">${ymd2(o.pv[2])}</span>`, 1) + td(chgH(o.p, o.pv[0]), 1) + '</tr>';
+    const RH = ['지역', '단지', '거래가 ', '이전 최고 ', '차이 '], CH = ['지역', '단지', '거래가 ', '직전거래 ', '변동 '];
+    const dLabel = `${today.slice(0, 4)}년 ${+today.slice(5, 7)}월 ${+today.slice(8)}일`;
+    const scopeTxt = baseline ? '최근 7일 계약 기준 (공개일 수집 첫날)' : `${today.replace(/-/g, '.')} 새로 공개된 거래 기준 (05시 수집)`;
+    const topRec = top(T.filter(([o]) => o.r), (a, b) => b[0].p - a[0].p)[0];
+    const body = `<p class="hint"><a href="/">홈</a> › <a href="/report/">실거래 리포트</a> › ${today}</p>
+<h1>${dLabel} 아파트 실거래 리포트</h1>
+<p class="lead">${esc(scopeTxt)}. 매매 ${comma(T.length)}건, 신고가 ${comma(T.filter(([o]) => o.r).length)}건, 전세 ${comma(J.length)}건. 신고가·변동은 같은 단지·같은 전용면적(㎡ 반올림)에서 계약일이 더 이른 거래(최대 3년)와 비교했고 해제 거래는 뺐어요.</p>
+<h2>시도별 건수</h2>${table(['지역', '매매 ', '신고가 ', '전세 ', '월세 ', '해제 '], rowsC.sort((a, b) => b[1] - a[1]).map((x) => x[0]))}
+<h2>🔥 매매 신고가 TOP 10</h2>${table(RH, top(T.filter(([o]) => o.r), (a, b) => b[0].p - a[0].p).map(recRow))}
+<h2>🔥 전세 신고가 TOP 10</h2>${table(RH, top(J.filter(([o]) => o.r), (a, b) => b[0].p - a[0].p).map(recRow))}
+<h2>📈 직전 거래 대비 상승 TOP 10</h2>${table(CH, top(up, byPc(1)).map(chgRow))}
+<h2>📉 직전 거래 대비 하락 TOP 10</h2>${table(CH, top(down, byPc(-1)).map(chgRow))}
+<h2>거래 많은 시·군·구 TOP 10</h2>${table(['지역', '매매 '], volume.map(([r, n]) => '<tr>' + td(rg(r)) + td(`<a href="/r/${r.code}/">${n}</a>`, 1) + '</tr>'))}
+<h2>전세가율 높은 거래 TOP 10</h2><p class="hint">전세가율 = 계약일 전 6개월 전세(갱신 제외) 중위값 ÷ 매매가, 전세 2건 이상인 곳만.</p>${table(['지역', '단지', '거래가 ', '전세 중위 ', '전세가율 '], top(jr, (a, b) => b[0].jr[0] / b[0].p - a[0].jr[0] / a[0].p).map(([o, r]) => '<tr>' + td(rg(r)) + td(nm([o, r])) + td(fmtWon(o.p), 1) + td(`${fmtWon(o.jr[0])} <span class="hint">${o.jr[1]}건</span>`, 1) + td(`<b>${pct(o.jr[0], o.p)}%</b>`, 1) + '</tr>'))}
+<p><a href="/today/">시군구별 오늘 실거래가 →</a> · <a href="/report/">지난 리포트</a></p>`;
+    const rep = { title: `${dLabel} 아파트 실거래 리포트 | 신고가·상승·하락·거래량 | 부동산 알리미`, p: `/report/${today}/`, body,
+      desc: `${dLabel} 아파트 실거래: 매매 ${T.length}건, 신고가 ${T.filter(([o]) => o.r).length}건, 전세 ${J.length}건.${topRec ? ` 최고 신고가 ${topRec[0].a} ${fmtWon(topRec[0].p)}.` : ''} 시도별 건수, 상승·하락 TOP 10, 전세가율.`,
+      ld: { '@context': 'https://schema.org', '@graph': [crumbs([['홈', '/'], ['실거래 리포트', '/report/'], [today, `/report/${today}/`]]), { '@type': 'Article', headline: `${dLabel} 아파트 실거래 리포트`, datePublished: today, dateModified: today, author: { '@type': 'Organization', name: '부동산 알리미' } }] } };
+    if (!FIX) { fs.mkdirSync(RD, { recursive: true }); fs.writeFileSync(path.join(RD, today + '.json'), JSON.stringify(rep)); }
+    const saved = FIX ? [rep] : fs.readdirSync(RD).filter((f) => /^\d{4}-\d\d-\d\d\.json$/.test(f)).sort().reverse().map((f) => JSON.parse(fs.readFileSync(path.join(RD, f), 'utf8')));
+    for (const x of saved) write(x.p, page(x));
+    write('/report/', page({ title: '아파트 실거래 리포트 | 날짜별 신고가·상승·하락 | 부동산 알리미', p: '/report/',
+      desc: '날짜별 아파트 실거래 리포트: 새로 공개된 거래의 시도별 건수, 신고가 TOP 10, 상승·하락 TOP 10, 거래 많은 지역.',
+      body: `<h1>아파트 실거래 리포트</h1><p class="lead">매일 05시 수집한 새 공개 거래를 한 페이지로 정리해요.</p><ul class="rec">${saved.map((x) => `<li><a href="${x.p}">${esc(x.title.split(' | ')[0])}</a> <span class="hint">${esc(x.desc.split(':')[1] || '').split('.')[0]}</span></li>`).join('')}</ul>` }));
+  }
 
   // 청약
   const open = subs.filter((x) => normDate(x.PRZWNER_PRESNATN_DE || x.RCEPT_ENDDE) >= today).sort((a, b) => normDate(a.RCEPT_BGNDE).localeCompare(normDate(b.RCEPT_BGNDE)));
@@ -554,7 +804,8 @@ ${table(['시·군·구', `${ymLabel(months[0]).slice(6)} 매매 `, '2개월 매
     body: `<h1>부동산 알리미</h1>
 <p class="lead">전국 아파트 실거래가와 청약·LH 공고를 공공데이터로 매일 새벽 모아 보여줘요.</p>
 ${recSection(recs, collecting, sidos)}
-<p><a class="cta" href="/today/">📋 오늘 실거래가 — 시군구·읍면동별 매매·전세·월세, 상승·하락 거래 보기 →</a></p>
+<p><a class="cta" href="/report/${today}/">📊 ${+today.slice(5, 7)}월 ${+today.slice(8)}일 실거래 리포트 — 신고가·상승·하락 TOP 10 →</a></p>
+<p><a class="cta" href="/today/">📋 오늘 실거래가 — 시군구별 새로 공개된 매매·전세·월세, 신고가·상승·하락·해제 거래 보기 →</a></p>
 <h2>🏢 지역별 아파트 실거래가 (${months.map(ymLabel).join('·')})</h2>
 <ul class="chips">${sidos.map((s) => `<li><a href="/apt/${s.code}/">${esc(s.name)} <span class="c">${comma(s.nT)}건</span></a></li>`).join('')}</ul>
 <h2>📝 접수 중·예정 청약 (${open.length}곳)</h2>${table(SUB_HEAD, open.slice(0, 8).map(subRow))}
@@ -572,11 +823,18 @@ ${recSection(recs, collecting, sidos)}
     body: '<h1>페이지를 찾을 수 없어요</h1><p class="lead">주소가 바뀌었거나 지난 공고일 수 있어요.</p><p><a href="/">홈으로</a> · <a href="/subscription/">청약 일정</a> · <a href="/lh/">LH 공고</a></p>' }), true);
 
   fs.writeFileSync(path.join(OUT, 'robots.txt'), `User-agent: *\nAllow: /\nSitemap: ${SITE}/sitemap.xml\n`);
-  fs.writeFileSync(path.join(OUT, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${indexable.map((p) => `<url><loc>${SITE}${p}</loc><lastmod>${today}</lastmod></url>`).join('\n')}\n</urlset>\n`);
+  // 사이트맵: 색인(sitemap.xml) → 일반·지역(/r/)·단지(/apt/{aptSeq}/ 5만 개씩)
+  const urlset = (ps) => `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${ps.map((p) => `<url><loc>${SITE}${p}</loc><lastmod>${seenPages[p][1]}</lastmod></url>`).join('\n')}\n</urlset>\n`;
+  const isApt = (p) => /^\/apt\/\d{5}-\d+\/$/.test(p), groups = { main: indexable.filter((p) => !p.startsWith('/r/') && !isApt(p)), regions: indexable.filter((p) => p.startsWith('/r/')) };
+  const apts = indexable.filter(isApt);
+  for (let i = 0; i * 50000 < apts.length; i++) groups['apt-' + (i + 1)] = apts.slice(i * 50000, (i + 1) * 50000);
+  const smFiles = Object.entries(groups).filter(([, ps]) => ps.length).map(([n, ps]) => { fs.writeFileSync(path.join(OUT, `sitemap-${n}.xml`), urlset(ps)); return [n, ps.reduce((m, p) => (seenPages[p][1] > m ? seenPages[p][1] : m), '')]; });
+  fs.writeFileSync(path.join(OUT, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${smFiles.map(([n, lm]) => `<sitemap><loc>${SITE}/sitemap-${n}.xml</loc><lastmod>${lm}</lastmod></sitemap>`).join('\n')}\n</sitemapindex>\n`);
+  if (!FIX) fs.writeFileSync(path.join(HIST, '_pages.json'), JSON.stringify(seenPages));
 
-  console.log(`완료: 페이지 ${pages}개 (색인 ${indexable.length}), 실거래 실패 ${failures.length}/${tasks.length}, 청약 ${subs.length}, LH ${lh.length}`);
+  console.log(`완료: 페이지 ${pages}개 (색인 ${indexable.length}, 단지 ${nApt}), 공개일 기준선 ${baseline ? '예(첫 수집)' : '아니오'}, 실거래 실패 ${failures.length}/${tasks.length}, 청약 ${subs.length}, LH ${lh.length}`);
   console.log('API 호출 수:', FIX ? '(fixtures)' : JSON.stringify(calls));
 }
 
-module.exports = { fmtWon, median, normDate, areaBand, parseRtms, toMan, recKey, recPrice, putMonth, priorStats, findRecords, dealRows, pruneHist, emptyHist, loadHist, saveHist, rtms, calls, pool, RELIABLE, HIST };
+module.exports = { fmtWon, median, normDate, areaBand, parseRtms, toMan, recKey, recPrice, putMonth, priorStats, findRecords, dealRows, chg, pct, jeonseMedian, pruneHist, emptyHist, loadHist, saveHist, rtms, calls, pool, RELIABLE, HIST };
 if (require.main === module) main().catch((e) => { console.error('❌ 빌드 실패:', e.message); process.exit(1); });
