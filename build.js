@@ -398,7 +398,7 @@ async function pool(items, n, fn) {
 // ---------- 렌더 ----------
 let STAMP = '';
 const INDEXNOW_KEY = 'e386846d4b6f939fd1b440af9728c599';
-const NETWORK = [['계산기', CALC], ['부동산 알리미', SITE], ['정부 지원금 찾기', 'https://grant.hanbogi.com'], ['혜택 알리미', 'https://benefit.hanbogi.com'], ['자격증 한눈에', 'https://license.hanbogi.com'], ['오늘의 게임', 'https://hanbogi.com'], ['오늘의 숙소', 'https://stay.hanbogi.com'], ['기기 비교소', 'https://gadget.hanbogi.com']];
+const NETWORK = [['계산기', CALC], ['부동산 알리미', SITE], ['정부 지원금 찾기', 'https://grant.hanbogi.com'], ['여행회화', 'https://talk.hanbogi.com'], ['혜택 알리미', 'https://benefit.hanbogi.com'], ['자격증 한눈에', 'https://license.hanbogi.com'], ['오늘의 게임', 'https://hanbogi.com'], ['오늘의 숙소', 'https://stay.hanbogi.com'], ['기기 비교소', 'https://gadget.hanbogi.com']];
 // 혜택 알리미 청약 가점 글(/9)은 2026-10-01 12:00 예약 공개 — 그 전엔 블로그 홈으로
 const benefitSub = (today) => today >= '2026-10-02' ? 'https://benefit.hanbogi.com/9' : 'https://benefit.hanbogi.com';
 function page({ title, desc, p, body, noindex, ld, price }) { // price(만원) = 계산기에 미리 채울 거래가
