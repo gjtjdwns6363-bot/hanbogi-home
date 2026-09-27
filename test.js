@@ -86,7 +86,22 @@ assert.deepStrictEqual(jeonseMedian([[20260801, 50000, 3], [20260901, 60000, 5],
   const h = recCard(L[1], 0, 't', 2026);
   assert.ok(h.includes('1위') && h.includes('<svg class="spark"') && h.includes('+33.3%') && h.includes('27년차') && h.includes('이전 최고가') && h.includes('/apt/11680-1/#a85'));
   const sec = require('./build.js').recSection({ t: L, r: [] }, { t: [], r: [] }, [], 2026);                     // 홈에 싣는 스크립트가 문법 오류 없이 파싱되는지
-  new Function(sec.html.match(/<script>([\s\S]*)<\/script>/)[1]); assert.strictEqual(JSON.parse(sec.json).t.length, 4); }
+  new Function(sec.html.match(/<script>([\s\S]*)<\/script>/)[1]); assert.strictEqual(JSON.parse(sec.json).t.length, 4);
+  // 날짜 표기: 단지 이름 옆 계약일, 이전 최고가 날짜, 처음 본 날이 있으면 'N일 만에 공개'
+  const { ymd2, recFilter, sggOpts } = require('./build.js');
+  assert.strictEqual(ymd2('2026-09-23'), '26.09.23'); assert.strictEqual(ymd2(''), '');
+  assert.ok(h.includes('</a> <span class="dt">계약 26.09.01</span></h3>') && h.includes('· 26.01.02 계약') && !h.includes('만에 공개'));
+  assert.ok(recCard([...L[1], '2026-09-04'], 0, 't', 2026).includes('공개 26.09.04 · 계약 후 3일 만에 공개'));
+  assert.ok(recCard([...L[1], '2026-09-01'], 0, 't', 2026).includes('계약 당일 공개'));
+  // 지역 필터: 시도 → 시군구, '' = 전체
+  const M = [...L, ['11', '서울 서초구', '11650', 'e', 84, '1', 3, 2, '', '2026-09-02', '', '', 0, 0, []], ['41', '경기 성남시 분당구', '41135', 'f', 84, '1', 3, 2, '', '2026-09-02', '', '', 0, 0, []]];
+  const f = (sd, sg) => recFilter(M, sd, sg).map((x) => x[3]).join('');
+  assert.strictEqual(f('', ''), 'abcdef'); assert.strictEqual(f('11', ''), 'abcde'); assert.strictEqual(f('11', '11650'), 'e'); assert.strictEqual(f('41', '41135'), 'f'); assert.strictEqual(f('41', '11650'), '');
+  const D = { t: M, r: [M[4]] };
+  assert.deepStrictEqual(sggOpts(D, 't', '11'), [['11680', '강남구', 4], ['11650', '서초구', 1]]);
+  assert.deepStrictEqual(sggOpts(D, 'r', '11'), [['11680', '강남구', 0], ['11650', '서초구', 1]]); // 다른 탭에만 있어도 선택지 유지(0건)
+  assert.deepStrictEqual(sggOpts(D, 't', '41'), [['41135', '성남시 분당구', 1]]);
+  assert.ok(sec.html.includes('id="rec-sgg"')); }
 
 // IndexNow: 사이트맵 lastmod == 오늘인 URL만, 색인 순서대로, 상한까지
 { const { changedUrls } = require('./indexnow.js'), os = require('os'), dir = fs.mkdtempSync(require('path').join(os.tmpdir(), 'inow-'));

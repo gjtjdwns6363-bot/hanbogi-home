@@ -198,6 +198,7 @@ const jeonseMedian = (l, dn) => { // 계약일 전 6개월 전세(갱신 제외)
   return js.length ? [median(js), js.length] : null;
 };
 const ymdAny = (s) => { s = String(s || '').trim(); return normDate(s) || (/^\d{2}\.\d{2}\.\d{2}$/.test(s) ? '20' + s.replace(/\./g, '-') : ''); };
+const dealId = (v, r, key = recKey(r), dn = d8n(r), p = toMan(v === 't' ? r.dealAmount : r.deposit)) => [v, key, dn, p, r.floor, r.monthlyRent, (r.aptDong || '').trim()].join('|');
 function dealRows(d, h, months, today, seenOld, seenXOld) {
   const out = [], seen = {}, seenX = {}, spk = {};
   const latest = (l) => (l || []).reduce((a, e) => (!a || e[0] > a[0] ? e : a), null);
@@ -205,7 +206,7 @@ function dealRows(d, h, months, today, seenOld, seenXOld) {
   const push = (v, r) => {
     const key = recKey(r), dn = d8n(r), x = r.cdealType === 'O', p = toMan(v === 't' ? r.dealAmount : r.deposit);
     const o = { v, key, q: (r.aptSeq || '').trim(), a: r.aptNm, u: r.umdNm, y: +r.buildYear || 0, ar: +r.excluUseAr, f: r.floor, d: d8s(dn), p };
-    const id = [v, key, dn, p, r.floor, r.monthlyRent, (r.aptDong || '').trim()].join('|');
+    const id = dealId(v, r, key, dn, p);
     seen[id] = seenOld ? (seenOld[id] ?? today) : ''; // 저장소 첫 실행 날은 기준선('') — 한 번 정한 날짜는 안 바뀐다
     if (seen[id]) o.s = seen[id];
     if (x) { seenX[id] = seenXOld ? (seenXOld[id] ?? today) : ''; if (seenX[id]) o.sx = seenX[id]; o.x = 1; o.cd = ymdAny(r.cdealDay); }
@@ -264,11 +265,11 @@ function cardHtml(o, i, reg, yr) {
   const c = o.pv && !o.x ? (o.p - o.pv[0]) / o.pv[0] * 100 : '';
   let s = `<li class="deal${o.x ? ' cx' : ''}" data-u="${esc(o.u)}" data-ar="${o.ar}" data-p="${o.p + (o.m || 0) * 100}" data-c="${c === '' ? '' : c.toFixed(2)}" data-d="${o.d}"${o.g ? ' data-g="1"' : ''}>
 <div class="dl"><b class="rank">${i + 1}위</b>${o.v === 'w' ? '' : sparkSvg(o.sp)}</div><div class="dm">
-<h3>${o.q ? `<a href="/apt/${esc(o.q)}/#a${a}">${esc(o.a)}</a>` : esc(o.a)}</h3>
+<h3>${o.q ? `<a href="/apt/${esc(o.q)}/#a${a}">${esc(o.a)}</a>` : esc(o.a)} <span class="dt">계약 ${ymd2(o.d)}</span></h3>
 <p class="hint addr">${esc(reg.name)} ${esc(o.u)}${o.dg ? ' ' + esc(o.dg) + '동' : ''}${o.y ? ` · ${o.y}년 준공 · ${yr - o.y + 1}년차` : ''} · <a href="https://map.naver.com/p/search/${q}" target="_blank" rel="noopener nofollow">네이버지도</a> · <a href="https://map.kakao.com/?q=${q}" target="_blank" rel="noopener nofollow">카카오맵</a></p>
 <p class="badges"><span class="b ${o.v}">${sale ? '매매' : o.v === 'j' ? '전세' : '월세'}</span>${o.g ? '<span class="b g">직거래</span>' : ''}${o.r ? '<span class="b fire">🔥 신고가</span>' : ''}${o.tie ? '<span class="b">최고가 동률</span>' : ''}${o.x ? `<span class="b x">해제${o.cd ? ' ' + ymd2(o.cd) : ''}</span>` : ''}${o.rg ? `<span class="b ok">등기 ${ymd2(o.rg)}</span>` : ''}${o.ct ? `<span class="b">${esc(o.ct)}</span>` : ''}${o.s ? ` <span class="hint">계약 후 ${daysBetween(o.d, o.s)}일 만에 공개</span>` : ''}</p>
 <p class="price">${o.v === 'w' ? `${fmtWon(o.p)} / 월 ${comma(o.m)}만` : fmtWon(o.p)}${o.pv && !o.x ? ' ' + chgH(o.p, o.pv[0]) : ''}</p>
-<ul class="chips sm"><li>${esc(o.f)}층${+o.f <= 2 ? ' · 저층' : ''}</li><li>전용 ${o.ar}㎡ (약 ${pyeong(o.ar)}평형)</li><li>계약 ${ymd2(o.d)}</li>${o.term ? `<li>기간 ${esc(o.term)}</li>` : ''}</ul>`;
+<ul class="chips sm"><li>${esc(o.f)}층${+o.f <= 2 ? ' · 저층' : ''}</li><li>전용 ${o.ar}㎡ (약 ${pyeong(o.ar)}평형)</li>${o.term ? `<li>기간 ${esc(o.term)}</li>` : ''}</ul>`;
   if (o.v !== 'w') {
     s += '<dl class="kv">';
     s += `<dt>직전거래</dt><dd>${o.pv ? pfdH(o.pv) : '<span class="hint">없음 (3년 내 첫 거래)</span>'}</dd>`;
@@ -550,40 +551,54 @@ function subDetail(x, models, today) {
     desc: `${x.HOUSE_NM} (${x.SUBSCRPT_AREA_CODE_NM}) 청약 접수 ${normDate(x.RCEPT_BGNDE)}~${normDate(x.RCEPT_ENDDE)}, 당첨자 발표 ${normDate(x.PRZWNER_PRESNATN_DE)}. 주택형별 공급세대와 분양가.` });
 }
 
-// 홈 '최근 신고가' 카드. REC 줄 = [시도, 지역, 시군구, 단지, 전용, 층, 만원, 이전 최고, 이전 최고일, 계약일, aptSeq, 동, 준공, 직거래, 월별 중위가[]]
+// 홈 '최근 신고가' 카드. REC 줄 = [시도, 지역, 시군구, 단지, 전용, 층, 만원, 이전 최고, 이전 최고일, 계약일, aptSeq, 동, 준공, 직거래, 월별 중위가[], 처음 본 날(없으면 '')]
 // 정렬·카드 함수는 브라우저에도 그대로(String(fn)) 실어 보낸다 — 테스트한 코드와 화면 코드가 같다
 const REC_SORT = {
   rate: (a, b) => b[6] / b[7] - a[6] / a[7] || b[9].localeCompare(a[9]), // 상승률(이전 최고 대비) 높은 순, 같으면 최신 계약
   amt: (a, b) => (b[6] - b[7]) - (a[6] - a[7]) || b[9].localeCompare(a[9]),
   new: (a, b) => b[9].localeCompare(a[9]) || b[6] / b[7] - a[6] / a[7],
 };
+const recFilter = (L, sd, sg) => L.filter((x) => (!sd || x[0] === sd) && (!sg || x[2] === sg)); // 시도·시군구 ('' = 전체)
+function sggOpts(D, k, sd) { // 시군구 선택지 [코드, 이름, 현재 탭 건수] — 두 탭 모두의 시군구를 이름순으로
+  const m = {};
+  for (const x of D.t.concat(D.r)) if (x[0] === sd) m[x[2]] ||= [x[2], x[1].split(' ').slice(1).join(' '), 0];
+  for (const x of D[k]) if (m[x[2]]) m[x[2]][2]++;
+  return Object.values(m).sort((a, b) => a[1].localeCompare(b[1], 'ko'));
+}
 function recCard(x, i, k, yr) {
-  const [, rn, code, a, ar, f, p, prev, pd, d, q, u, by, g, sp] = x;
+  const [, rn, code, a, ar, f, p, prev, pd, d, q, u, by, g, sp, s] = x, lag = s && d ? Math.round((Date.parse(s) - Date.parse(d)) / 864e5) : -1;
   return `<li class="deal"><div class="dl"><b class="rank">${i + 1}위</b>${sparkSvg(sp.map((v, j) => [j, v]))}</div><div class="dm">
-<h3>${q ? `<a href="/apt/${esc(q)}/#a${Math.round(ar)}">${esc(a)}</a>` : esc(a)}</h3>
+<h3>${q ? `<a href="/apt/${esc(q)}/#a${Math.round(ar)}">${esc(a)}</a>` : esc(a)} <span class="dt">계약 ${ymd2(d)}</span></h3>
 <p class="hint addr"><a href="/r/${code}/high/">${esc(rn)}</a> ${esc(u)}${by ? ` · ${by}년 준공 · ${yr - by + 1}년차` : ''}</p>
 <p class="badges"><span class="b ${k === 't' ? 't">매매' : 'j">전세'}</span><span class="b fire">🔥 신고가</span>${g ? '<span class="b g">직거래</span>' : ''}</p>
 <p class="price">${fmtWon(p)} ${chgH(p, prev)}</p>
-<ul class="chips sm"><li>${esc(f)}층</li><li>전용 ${ar}㎡ (약 ${pyeong(ar)}평형)</li><li>계약 ${ymd2(d)}</li></ul>
-<dl class="kv"><dt>이전 최고가</dt><dd>${fmtWon(prev)} <span class="hint">${ymd2(pd)}</span></dd></dl></div></li>`;
+${lag >= 0 ? `<p class="hint">공개 ${ymd2(s)} · ${lag ? `계약 후 ${lag}일 만에 공개` : '계약 당일 공개'}</p>
+` : ''}<ul class="chips sm"><li>${esc(f)}층</li><li>전용 ${ar}㎡ (약 ${pyeong(ar)}평형)</li></ul>
+<dl class="kv"><dt>이전 최고가</dt><dd>${fmtWon(prev)} <span class="hint">· ${ymd2(pd)} 계약</span></dd></dl></div></li>`;
 }
 function recSection(recs, collecting, sidos, yr) { // 자료는 /data/rec.json (빌드 때 생성), 카드는 20장씩 그린다
   const note = (k) => collecting[k].length ? `과거 데이터 수집 중(최근 ${collecting[k].minCov}개월 기준)인 ${collecting[k].length}곳은 빠져 있어요.` : '';
   const json = JSON.stringify({ t: recs.t.slice(0, 3000), r: recs.r.slice(0, 3000), note: { t: note('t'), r: note('r') } });
-  const fns = { comma, esc, fmtWon, man, chg, chgH, pyeong, ymd2, sparkSvg, recCard };
+  const fns = { comma, esc, fmtWon, man, chg, chgH, pyeong, ymd2, sparkSvg, recFilter, sggOpts, recCard };
   const js = `(function(){${Object.entries(fns).map(([n, f]) => `var ${n}=${f};`).join('')}var SORT={${Object.entries(REC_SORT).map(([n, f]) => `${n}:${f}`).join(',')}};
-var D,k="t",n=20,Y=${yr},$=function(i){return document.getElementById(i)},tabs=document.querySelectorAll("#rec-tabs [data-k]");
-function draw(){if(!D)return;var sd=$("rec-sido").value,L=D[k].filter(function(x){return!sd||x[0]===sd}).sort(SORT[$("rec-so").value]);
+var D,k="t",n=20,Y=${yr},$=function(i){return document.getElementById(i)},tabs=document.querySelectorAll("#rec-tabs [data-k]"),Q=new URLSearchParams(location.search),sg0=Q.get("sgg")||"";
+function pick(el,v){if(v&&[].some.call(el.options,function(o){return o.value===v}))el.value=v}
+pick($("rec-sido"),Q.get("sido"));pick($("rec-so"),Q.get("sort"));if(Q.get("type")==="전세")k="r";
+[].forEach.call(tabs,function(x){x.setAttribute("aria-selected",x.dataset.k===k)});
+function fillSgg(){var sd=$("rec-sido").value,el=$("rec-sgg"),v=sg0||el.value;sg0="";el.innerHTML='<option value="">시·군·구 전체</option>'+(sd&&D?sggOpts(D,k,sd).map(function(o){return'<option value="'+o[0]+'">'+esc(o[1])+" ("+o[2]+")</option>"}).join(""):"");el.disabled=!sd||!D;pick(el,v);if(el.value!==v)el.value=""}
+function sync(){var p=new URLSearchParams(),a=[["sido",$("rec-sido").value],["sgg",$("rec-sgg").value],["type",k==="r"?"전세":""],["sort",$("rec-so").value==="rate"?"":$("rec-so").value]];a.forEach(function(e){if(e[1])p.set(e[0],e[1])});p=p.toString();try{history.replaceState(null,"",location.pathname+(p?"?"+p:"")+location.hash)}catch(e){}}
+function draw(){if(!D)return;sync();var L=recFilter(D[k],$("rec-sido").value,$("rec-sgg").value).sort(SORT[$("rec-so").value]);
 $("rec-note").textContent=D.note[k];$("rec-list").innerHTML=L.slice(0,n).map(function(x,i){return recCard(x,i,k,Y)}).join("");
 $("rec-empty").hidden=L.length>0;$("rec-more").hidden=L.length<=n}
 function reset(){n=20;draw()}
-[].forEach.call(tabs,function(b){b.onclick=function(){k=b.dataset.k;[].forEach.call(tabs,function(x){x.setAttribute("aria-selected",x===b)});reset()}});
-$("rec-sido").onchange=$("rec-so").onchange=reset;$("rec-more").onclick=function(){n+=20;draw()};
-fetch("/data/rec.json").then(function(r){return r.json()}).then(function(j){D=j;draw()}).catch(function(){$("rec-note").textContent="신고가 자료를 불러오지 못했어요."})})();`;
+[].forEach.call(tabs,function(b){b.onclick=function(){k=b.dataset.k;[].forEach.call(tabs,function(x){x.setAttribute("aria-selected",x===b)});fillSgg();reset()}});
+$("rec-sido").onchange=function(){$("rec-sgg").value="";fillSgg();reset()};$("rec-sgg").onchange=$("rec-so").onchange=reset;$("rec-more").onclick=function(){n+=20;draw()};
+fetch("/data/rec.json").then(function(r){return r.json()}).then(function(j){D=j;fillSgg();draw()}).catch(function(){$("rec-note").textContent="신고가 자료를 불러오지 못했어요."})})();`;
   return { json, html: `<h2>🔥 최근 신고가</h2>
 <p class="hint">최근 14일 계약 중 같은 단지·같은 전용면적(㎡ 반올림)에서 그 전 최고가를 넘은 거래예요. 매매는 해제 거래, 전세는 월세를 뺐어요. 그래프 = 월별 중위가 추이(최대 3년).</p>
 <div class="tabs" id="rec-tabs" role="tablist"><button type="button" role="tab" data-k="t" aria-selected="true">매매 <span class="c">${comma(recs.t.length)}</span></button><button type="button" role="tab" data-k="r" aria-selected="false">전세 <span class="c">${comma(recs.r.length)}</span></button>
-<select id="rec-sido" aria-label="시도 선택"><option value="">전국</option>${sidos.map((s) => `<option value="${s.code}">${esc(s.name)}</option>`).join('')}</select>
+<select id="rec-sido" aria-label="시도 선택"><option value="">전국 전체</option>${sidos.map((s) => `<option value="${s.code}">${esc(s.name)}</option>`).join('')}</select>
+<select id="rec-sgg" aria-label="시군구 선택" disabled><option value="">시·군·구 전체</option></select>
 <select id="rec-so" aria-label="정렬"><option value="rate">상승률순</option><option value="amt">상승액순</option><option value="new">최신 계약순</option></select></div>
 <p class="hint" id="rec-note"></p>
 <ol class="deals" id="rec-list"></ol>
@@ -673,7 +688,7 @@ async function main() {
   let nApt = 0; const aptN = {};
   for (const r of regions) {
     const h = FIX ? emptyHist() : loadHist(r.code), d = data[r.code];
-    d.rec = {}; d.cov = {};
+    d.rec = {}; d.cov = {}; const mine = [];
     for (const kind of ['t', 'r']) {
       const H = h[kind], src = d[kind === 't' ? 'trade' : 'rent'];
       pruneHist(H, months36);
@@ -684,10 +699,12 @@ async function main() {
         events.push({ kind, code: r.code, key: x.key, d: x.d, p: x.p, prev: x.prev, prevDate: x.prevDate, floor: x.r.floor });
         if (d.cov[kind] >= RELIABLE && x.d >= since14) recs[kind].push([r.code.slice(0, 2), `${r.sidoShort} ${r.name}`, r.code, x.r.aptNm, Math.round(+x.r.excluUseAr * 10) / 10, x.r.floor, x.p, x.prev, x.prevDate, x.d,
           (x.r.aptSeq || '').trim(), x.r.umdNm, +x.r.buildYear || 0, x.r.dealingGbn === '직거래' ? 1 : 0, monthly(H.k[x.key]).map((e) => e[1])]); // REC 줄 형식
+        if (d.cov[kind] >= RELIABLE && x.d >= since14) mine.push([recs[kind][recs[kind].length - 1], dealId(kind === 't' ? 't' : 'j', x.r)]);
       }
     }
     const j = dealRows(d, h, months, today, h.seen, h.seenX);
     h.seen = j.seen; h.seenX = j.seenX; d.deals = j.deals;
+    for (const [row, id] of mine) row.push(j.seen[id] || ''); // 처음 본 날 → 홈 카드 'N일 만에 공개'
     // 단지 페이지: 최근 두 달 거래가 있는 aptSeq
     const seqKeys = {};
     for (const kind of ['t', 'r']) for (const k of Object.keys(h[kind].k)) { const q = k.split('|')[0]; if (/^\d{5}-\d+$/.test(q)) (seqKeys[q] ||= new Set()).add(k); }
@@ -901,5 +918,5 @@ ${recHome.html}
   console.log('API 호출 수:', FIX ? '(fixtures)' : CACHE ? '(캐시, 0회)' : JSON.stringify(calls));
 }
 
-module.exports = { REC_SORT, recCard, recSection, fmtWon, median, normDate, areaBand, parseRtms, toMan, recKey, recPrice, putMonth, priorStats, findRecords, dealRows, chg, pct, jeonseMedian, pruneHist, emptyHist, loadHist, saveHist, rtms, calls, pool, RELIABLE, HIST };
+module.exports = { REC_SORT, recCard, recFilter, sggOpts, dealId, ymd2, recSection, fmtWon, median, normDate, areaBand, parseRtms, toMan, recKey, recPrice, putMonth, priorStats, findRecords, dealRows, chg, pct, jeonseMedian, pruneHist, emptyHist, loadHist, saveHist, rtms, calls, pool, RELIABLE, HIST };
 if (require.main === module) main().catch((e) => { console.error('❌ 빌드 실패:', e.message); process.exit(1); });
