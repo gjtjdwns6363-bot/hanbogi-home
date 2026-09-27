@@ -89,3 +89,6 @@ section{scroll-margin-top:12px}
 .tabs select{flex:1 1 120px}
 @media (max-width:420px){.filters{grid-template-columns:1fr 1fr}.deal{grid-template-columns:64px minmax(0,1fr);gap:8px;padding:10px}}
 .dm h3 .dt{display:inline-block;white-space:nowrap;margin-left:4px;padding:1px 7px;border-radius:999px;background:var(--line);color:var(--ink);font-size:.78rem;font-weight:600;vertical-align:middle}
+@media (min-width:768px){.deals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.deals>.deal{margin:0}}
+@media (min-width:1024px){main,footer{max-width:1200px}}
+@media (min-width:1200px){.deals{grid-template-columns:repeat(3,minmax(0,1fr))}}
